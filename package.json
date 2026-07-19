@@ -1,0 +1,31 @@
+{
+  "name": "@gf/framework",
+  "version": "0.1.0",
+  "description": "Deterministic 2D game framework for agent-driven iterative development",
+  "type": "module",
+  "license": "MIT",
+  "files": ["dist", "docs", "SETUP.md", "CHANGELOG.md"],
+  "exports": {
+    "./engine": {
+      "types": "./dist/engine/index.d.ts",
+      "default": "./dist/engine/index.js"
+    },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "default": "./dist/shell/index.js"
+    },
+    "./net": {
+      "types": "./dist/net/index.d.ts",
+      "default": "./dist/net/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

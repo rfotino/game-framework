@@ -1,0 +1,25 @@
+{
+  "name": "GAME_SLUG",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "sim": "tsx scripts/sim.ts",
+    "test": "vitest run",
+    "deploy": "echo 'TODO: wire telemachus deploy (rsync dist/ + pm2/nginx)' && exit 1"
+  },
+  "dependencies": {
+    "@gf/framework": "github:rfotino/game-framework#v0.1.0",
+    "howler": "^2.2.4",
+    "pixi.js": "^8.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.0"
+  }
+}
