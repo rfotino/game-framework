@@ -21,9 +21,27 @@ export type SimState = Record<string, unknown>;
  */
 export type InputFrame = Record<string, unknown>;
 
-/** Tuning values. Flat-ish object of numbers/booleans; debug panel generates sliders. */
+/**
+ * A single tuning value. Numbers and booleans are the LIVE-tunable ones (a debug
+ * panel generates a slider or a checkbox from them). Strings are for id-valued
+ * config — which encounter/level/mode is active, which hull sits in a slot:
+ * settings that NAME a registry entry rather than dial a magnitude. Without them
+ * a game has to encode ids as indices into a frozen list, which then has to stay
+ * append-only forever or saved params silently repoint at a different thing.
+ */
+export type ParamLeaf = number | boolean | string;
+
+/**
+ * Tuning values. Nested object of leaves, leaf ARRAYS (per-slot / per-index
+ * config, e.g. one hull id per seat), and sub-groups.
+ *
+ * Live tuning is the number/boolean half: a panel should render those and skip
+ * strings and arrays, which are nearly always baked at `init` — editing one
+ * mid-run is a no-op at best. A game that wants a string editable live needs an
+ * options list per path, not a free text field.
+ */
 export interface Params {
-  [key: string]: number | boolean | Params;
+  [key: string]: ParamLeaf | ParamLeaf[] | Params;
 }
 
 export interface TickCtx<P extends Params> {

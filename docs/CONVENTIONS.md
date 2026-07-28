@@ -25,8 +25,14 @@ is one-shotted. Optimize for fast feel-feedback and cheap experimentation.
    cosmetic RNG in the render layer for particles/screenshake/etc. Cosmetic code must
    NEVER consume `ctx.rng` — this silently desyncs replays.
 5. **Params, not constants.** All tuning values (speeds, costs, cooldowns, spawn
-   rates, damage numbers) live in `src/params.ts` with defaults. The debug panel
-   auto-generates sliders from it. Inline magic numbers in sim code are a bug.
+   rates, damage numbers) live in `src/params.ts` with defaults, in one nested
+   object a panel can walk and auto-generate sliders from. The framework ships the
+   `DebugPanel` *interface* (`@gf/framework/shell`), not an implementation — the
+   panel itself is the game's, and building one early pays for itself. Number and
+   boolean leaves are the live-tunable half; string and leaf-array values exist for
+   id-valued config (which level/mode is active, which entity sits in which slot)
+   and are baked at `init`, not dialled live. Inline magic numbers in sim code are
+   a bug.
 6. **Data-driven content.** Cards, enemies, items, levels live in JSON under
    `content/`, validated by schemas in `content/schemas/`. Adding content means
    editing data, not code, wherever feasible.
@@ -67,7 +73,7 @@ is one-shotted. Optimize for fast feel-feedback and cheap experimentation.
 
 ## Commands (uniform across games)
 
-- `npm run dev` — Vite dev server with hot reload + debug panel
+- `npm run dev` — Vite dev server with hot reload + the game's debug panel
 - `npm run sim` — headless bot simulation, prints hashes + invariant violations
 - `npm test` — invariant + golden replay suite
 - `npm run deploy` — build and deploy to the VPS (pm2 + nginx)

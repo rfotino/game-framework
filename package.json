@@ -1,6 +1,6 @@
 {
   "name": "@gf/framework",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic 2D game framework for agent-driven iterative development",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "npm run typecheck && vitest run"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
