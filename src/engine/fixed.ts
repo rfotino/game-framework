@@ -30,8 +30,15 @@ const EXACT = 9007199254740992; // 2^53
 /** Int -> fixed. Multiplies rather than shifts: `<<` is int32 and wraps past 32768 u. */
 export const fx = (n: number): Fx => ((n | 0) * FX_ONE) as Fx;
 
-/** Float -> fixed. Use ONLY at boundaries (content loading, tuning params). */
-export const fxFromFloat = (f: number): Fx => Math.round(f * FX_ONE) as Fx;
+/**
+ * Float -> fixed. Use ONLY at boundaries (content loading, tuning params).
+ *
+ * The `+ 0` here and on `neg`/`mul`/`div` collapses negative zero, which `| 0`
+ * used to do as a side effect. A `-0` compares equal to `0` in arithmetic but
+ * not under `Object.is`, and JSON round-trips it to `0` — so left alone it makes
+ * a state differ from itself across the wire while every value in it matches.
+ */
+export const fxFromFloat = (f: number): Fx => (Math.round(f * FX_ONE) + 0) as Fx;
 
 /** Fixed -> float. RENDER BOUNDARY ONLY. */
 export const toFloat = (a: Fx): number => a / FX_ONE;
@@ -41,7 +48,7 @@ export const toInt = (a: Fx): number => Math.floor(a / FX_ONE);
 
 export const add = (a: Fx, b: Fx): Fx => (a + b) as Fx;
 export const sub = (a: Fx, b: Fx): Fx => (a - b) as Fx;
-export const neg = (a: Fx): Fx => -a as Fx;
+export const neg = (a: Fx): Fx => (-a + 0) as Fx;
 
 /**
  * Multiply. The product is formed in float64 and is exact while |a·b| < 2^53,
@@ -49,10 +56,10 @@ export const neg = (a: Fx): Fx => -a as Fx;
  * Past that it rounds rather than wraps. For squared lengths and dot products at
  * arena scale use `vDot` / `vLen` / `vDist` below, which never form the product.
  */
-export const mul = (a: Fx, b: Fx): Fx => Math.floor((a * b) / FX_ONE) as Fx;
+export const mul = (a: Fx, b: Fx): Fx => (Math.floor((a * b) / FX_ONE) + 0) as Fx;
 
 /** Divide (b != 0). The numerator is exact while |a| < 2^21 world units. */
-export const div = (a: Fx, b: Fx): Fx => Math.floor((a * FX_ONE) / b) as Fx;
+export const div = (a: Fx, b: Fx): Fx => (Math.floor((a * FX_ONE) / b) + 0) as Fx;
 
 export const abs = (a: Fx): Fx => (a < 0 ? -a : a) as Fx;
 export const min = (a: Fx, b: Fx): Fx => (a < b ? a : b);

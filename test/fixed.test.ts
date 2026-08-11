@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 import {
   FX_ONE,
   add,
+  div,
   fx,
   fxIsExact,
   mul,
+  neg,
   toInt,
   fxFromFloat,
   toFloat,
@@ -168,6 +170,18 @@ describe("pythLeg", () => {
 
   it("clamps to zero instead of going imaginary when the ray misses", () => {
     expect(pythLeg(fx(300), fx(700))).toBe(0);
+  });
+});
+
+describe("negative zero", () => {
+  it("never escapes an op — `| 0` used to collapse it and something must", () => {
+    // -0 is arithmetically equal to 0 but not under Object.is, and JSON turns it
+    // into 0: left alone it makes a serialized state differ from itself.
+    for (const r of [neg(fx(0)), mul(fx(-5), fx(0)), mul(fx(0), fx(-5)), div(fx(0), fx(-5)), fxFromFloat(-0.0000001)]) {
+      expect(Object.is(r as number, -0)).toBe(false);
+      expect(r).toBe(0);
+    }
+    expect(Object.is(JSON.parse(JSON.stringify({ v: mul(fx(-5), fx(0)) })).v, 0)).toBe(true);
   });
 });
 
