@@ -137,7 +137,8 @@ const isqrt = (n: number): number => {
  */
 export const sqrt = (a: Fx): Fx => {
   if (a <= 0) return 0 as Fx;
-  if (a * FX_ONE < EXACT) return isqrt(a * FX_ONE) as Fx;
+  const n = a * FX_ONE;
+  if (n < EXACT) return isqrt(n) as Fx;
   let v: number = a;
   let s = 1;
   while (v * FX_ONE >= EXACT) {
@@ -253,6 +254,42 @@ export const vLen = (a: Vec2): Fx => mag(a.x, a.y) as Fx;
 
 /** |a − b| in fixed-point, across the full Fx range. */
 export const vDist = (a: Vec2, b: Vec2): Fx => mag(a.x - b.x, a.y - b.y) as Fx;
+
+/**
+ * `|a − b|²` as an `Fx`, exact to |a − b| < 370000 u. The spelling to reach for when
+ * comparing two separations, or a separation against a radius, without paying for the
+ * square root — `vDistSq(a, b) < mul(r, r)`.
+ *
+ * It exists because `vLenSq(vSub(a, b))` is the same number and allocates an intermediate
+ * `Vec2` to get there. In a per-pair-per-tick loop that allocation is the dominant cost,
+ * which made the squared form SLOWER than the `vDist` it was meant to beat — the opposite
+ * of why a caller reaches for it.
+ */
+export const vDistSq = (a: Vec2, b: Vec2): Fx => {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const px = dx * dx;
+  const py = dy * dy;
+  if (px < HALF_EXACT && py < HALF_EXACT) return (Math.floor((px + py) / FX_ONE) + 0) as Fx;
+  const xh = Math.floor(dx / FX_ONE);
+  const yh = Math.floor(dy / FX_ONE);
+  return (xh * dx +
+    yh * dy +
+    Math.floor(((dx - xh * FX_ONE) * dx + (dy - yh * FX_ONE) * dy) / FX_ONE) +
+    0) as Fx;
+};
+
+/**
+ * `v` rotated by the unit rotor `f` — the complex product `v · f`, and the spelling for
+ * "put this body-local vector into the world frame". `f` is a facing, not an angle: there
+ * is no trig in the sim, so a rotation is always this.
+ *
+ * Both components go through `mul`, so it is exact wherever `mul` is, at any magnitude of
+ * `v`. Games that lacked it grew a private `rot`/`cmul` per module — four in one repo, all
+ * the same four products, none of them wrong but none of them shared.
+ */
+export const vRot = (v: Vec2, f: Vec2): Vec2 =>
+  vec(sub(mul(v.x, f.x), mul(v.y, f.y)), add(mul(v.x, f.y), mul(v.y, f.x)));
 
 /**
  * `a / |a|`. The naive spelling (`vScale(a, div(FX_ONE, vLen(a)))`) forms a

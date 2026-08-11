@@ -10,8 +10,16 @@ import {
   fx,
   fxIsExact,
   fxStateViolations,
+  add,
+  mul,
   sqrt,
+  sub,
   toFloat,
+  vDistSq,
+  vec,
+  vRot,
+  vLenSq,
+  vSub,
   type Fx,
 } from "../src/engine/index.js";
 
@@ -165,5 +173,58 @@ describe("fxStateViolations: the guard that replaces `| 0`", () => {
     expect(fxStateViolations({ v: 2 ** 54 })).toHaveLength(1);
     expect(fxStateViolations({ v: Number.NaN })).toHaveLength(1);
     expect(fxStateViolations({ v: Number.POSITIVE_INFINITY })).toHaveLength(1);
+  });
+});
+
+describe("vDistSq: the allocation-free squared separation", () => {
+  it("equals vLenSq(vSub(a, b)) exactly, at every scale", () => {
+    const cases: [number, number, number, number][] = [
+      [0, 0, 3, 4],
+      [1, 1, 1, 1],
+      [-7, 12, 40, -3],
+      [1200, -800, -2400, 900],
+      [19000, 19000, -19000, -19000],
+      [300000, 0, -60000, 12345],
+    ];
+    for (const [ax, ay, bx, by] of cases) {
+      const a = vec(fx(ax), fx(ay));
+      const b = vec(fx(bx), fx(by));
+      expect(vDistSq(a, b), `(${ax},${ay})-(${bx},${by})`).toBe(vLenSq(vSub(a, b)));
+    }
+  });
+
+  it("compares against a radius the way a caller means it", () => {
+    const a = vec(fx(0), fx(0));
+    const b = vec(fx(300), fx(400)); // exactly 500 u away
+    expect(vDistSq(a, b) < mul(fx(501), fx(501))).toBe(true);
+    expect(vDistSq(a, b) < mul(fx(499), fx(499))).toBe(false);
+    expect(toFloat(vDistSq(a, b))).toBeCloseTo(250_000, 0);
+  });
+});
+
+describe("vRot: the one rotation spelling", () => {
+  const rot = (v: { x: Fx; y: Fx }, f: { x: Fx; y: Fx }) =>
+    vec(sub(mul(v.x, f.x), mul(v.y, f.y)), add(mul(v.x, f.y), mul(v.y, f.x)));
+
+  it("matches the private spelling games grew, exactly", () => {
+    for (const [vx, vy, fx1, fy] of [
+      [10, 0, 1, 0],
+      [10, 0, 0, 1],
+      [-37, 88, 0.6, 0.8],
+      [1200, -3400, -0.28, 0.96],
+      [19000, 19000, 0.70710678, 0.70710678],
+    ] as const) {
+      const v = vec(fx(vx), fx(vy));
+      const f = vec(fx(fx1), fx(fy));
+      expect(vRot(v, f)).toEqual(rot(v, f));
+    }
+  });
+
+  it("preserves length through a quarter turn, and is identity on (1, 0)", () => {
+    const v = vec(fx(300), fx(400));
+    expect(vRot(v, vec(FX_ONE, 0 as Fx))).toEqual(v);
+    const turned = vRot(v, vec(0 as Fx, FX_ONE));
+    expect(toFloat(turned.x)).toBeCloseTo(-400, 3);
+    expect(toFloat(turned.y)).toBeCloseTo(300, 3);
   });
 });
