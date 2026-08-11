@@ -3,6 +3,77 @@
 Entries newest-first. Every entry that requires action in game repos includes a
 **Migration** section written as agent-executable instructions.
 
+## v0.4.0 — one spelling per operation, and it is exact
+
+The magnitude helpers had two problems and they were the same problem. `vDot`,
+`vCross` and `vLenSq2` returned "shifted-fx units" whose SCALE depended on how
+big the inputs were, so two results were only comparable when both were formed at
+the same magnitude — a rule no type could enforce, that every caller had to
+remember, and that a game had already worked around in five places. And the
+spelling that bought that range divided BOTH operands by 256 at every scale,
+including the scales where the square was already exact.
+
+Measured on the shipped code, against the true value computed in BigInt:
+
+| vector | old `vLen` error | now |
+|---|---|---|
+| acceleration, 0.2 u/tick² | **2.54%** | exact |
+| velocity, 7 u/tick | 0.08% | exact |
+| unit vector | **0.78%** (0.042° after `vNorm`) | exact |
+| ship offset, 40 u | 0.008% | exact |
+| arena, 2200 u | 0.0002% | unchanged (1/256 u step) |
+
+The loss was worst where the vectors were smallest, which is backwards: a `vNorm`
+of a unit vector kept about 8 significant bits per component. Nothing in the type
+said so.
+
+- **`vDot` / `vCross` / `vLenSq` now return `Fx` in world units.** A dot is a
+  length times a length. The `…Wide` fall-throughs are gone, and so is the
+  "comparisons and ratios only, at the same scale" caveat.
+- **`vLenSq2` is DELETED**, and `vLenSq` — which used to carry a "DANGER: only
+  valid below 1448 u" note — is now the single squared-length spelling, exact to
+  |a| < 370000 u.
+- **`mul` and `div` are exact across the range.** Both split at the point when the
+  direct product would leave 2^53, so `mul(d, d)` no longer stops being exact at
+  1448 u and `div` no longer needs |a| < 2^21 u. `div` also corrects a rounded
+  quotient against its remainder, which was off by one at the top of the range.
+- **`vLen` / `vDist` / `vNorm` / `pythLeg` are exact while both components are
+  under 1024 u** — every per-tick, unit and ship-scale vector — and keep the old
+  1/256 u step above that, where a float64 cannot hold the square at all.
+- **`vNorm` seats its operands in [2^24, 2^26) first**, so flooring the length
+  costs 2^-24 of it rather than 2^-13. This is what fixes normalizing a per-tick
+  vector.
+- **It is also faster**: 10–14% at accel/velocity/unit/ship scale (the fast path
+  forms no quotient), parity at arena scale. The v0.3.0 note warned that testing
+  the OPERANDS rather than the live square cost up to 13% — that warning was
+  really about a variable divisor defeating constant folding. With literal
+  divisors, operand-testing measures 6% against 44% for computing the square and
+  discarding it, so this version tests operands. The arrangement is benchmarked;
+  do not rearrange it on taste.
+- **`test/fixed-exact.test.ts` is new** and proves the above against BigInt rather
+  than against another float, at every scale, including the extremes of the range.
+
+**Determinism: every golden hash in every game moves.** Not a semantic change —
+the numbers are simply more correct — but every replay hash, render-command hash
+and state hash needs re-baselining in one deliberate pass.
+
+### Migration
+
+1. `vLenSq2(a)` → `vLenSq(a)`. The units change from shifted to true fx, so any
+   threshold it was compared against must be built the same way: a radius
+   comparison is now plainly `vLenSq(d) < mul(r, r)`.
+2. `vDot` / `vCross` results are now `Fx`. Sign-only uses (winding,
+   point-in-polygon, facing tests) need no change. A use that compared a dot
+   against a constant must have that constant re-derived in world units.
+3. **Delete local workarounds for the old imprecision.** Grep for `/ 256`,
+   `* 256`, `Math.trunc(… / 256)`, hand-rolled `isqrt`, and any comment
+   mentioning "truncates"/"sub-1/256". Anything that pre-scaled its operands to
+   defeat `vLen`'s truncation, or that hand-inlined the /256 squared distance to
+   match `vDist` bit-for-bit, is now WRONG rather than merely redundant: the
+   helper it was mirroring no longer rounds that way.
+4. Re-baseline golden hashes in one pass, after 1–3, and read any test asserting
+   sub-unit tolerances — several will now be tighter than they need to be.
+
 ## v0.3.0 — `Fx` is an exact integer, not an int32
 
 `FX_SHIFT` stays at 16 and `FX_ONE` stays at 65536: **the point does not move,

@@ -21,7 +21,6 @@ import {
   vCross,
   vLen,
   vLenSq,
-  vLenSq2,
   vNorm,
   vProj,
   pythLeg,
@@ -30,12 +29,10 @@ import {
 } from "../src/engine/fixed.js";
 
 const v = (x: number, y: number) => vec(fx(x), fx(y));
-/** Tolerance: the helpers drop sub-1/256-unit input precision by design. */
-const UNIT = 1 / 256;
 
 describe("vLen", () => {
   it("is exact on the classic triples at small scale", () => {
-    expect(toFloat(vLen(v(3, 4)))).toBeCloseTo(5, 2);
+    expect(vLen(v(3, 4))).toBe(fx(5));
     expect(toFloat(vLen(v(0, 0)))).toBe(0);
   });
 
@@ -65,22 +62,22 @@ describe("vLen", () => {
 });
 
 describe("vLenSq", () => {
-  it("is exact out to the ~1448 u square bound, which covers a real arena", () => {
+  it("is exact at every scale a game reaches — one spelling, no bound to remember", () => {
     expect(toFloat(vLenSq(v(3, 4)))).toBeCloseTo(25, 2);
-    // The 181 u wall is gone: this used to wrap negative, and is now the truth.
     expect(toFloat(vLenSq(v(1200, 0)))).toBeCloseTo(1_440_000, 0);
     expect(toFloat(vLenSq(v(1448, 0)))).toBeCloseTo(1448 * 1448, 0);
+    // Past the old 1448 u square bound, where this used to shed low bits.
+    expect(toFloat(vLenSq(v(20_000, 20_000)))).toBeCloseTo(2 * 20_000 ** 2, 0);
+    expect(toFloat(vLenSq(v(300_000, 0)))).toBeCloseTo(9e10, 0);
   });
 
-  it("degrades past the bound by rounding, never by flipping sign", () => {
-    // The reason vLenSq survives at all: over-range now costs low bits, where it
-    // used to cost the answer. A caller comparing against a radius still sorts.
-    const a = vec(fxFromFloat(7001.37), fxFromFloat(0));
-    const truth = 7001.37 ** 2;
-    const got = toFloat(vLenSq(a));
-    expect(got).toBeGreaterThan(0);
-    expect(Math.abs(got - truth) / truth).toBeLessThan(1e-6);
-    expect(vLenSq(v(20000, 20000))).toBeGreaterThan(vLenSq(v(19000, 19000)));
+  it("compares against a radius formed ANY way — the units are just fx units", () => {
+    // The point of the change: a caller no longer has to build its threshold
+    // through the same helper at the same magnitude to get comparable units.
+    const r = fx(500);
+    expect(vLenSq(v(300, 0)) < mul(r, r)).toBe(true);
+    expect(vLenSq(v(1200, 0)) < mul(r, r)).toBe(false);
+    expect(vLenSq(v(1600, 1200))).toBe(vLenSq(v(2000, 0)));
   });
 });
 
@@ -97,7 +94,7 @@ describe("vDist", () => {
   });
 });
 
-describe("vDot / vCross / vLenSq2", () => {
+describe("vDot / vCross", () => {
   it("keep the right sign and ordering at arena scale", () => {
     const a = v(1200, 0);
     expect(vDot(a, v(1, 0))).toBeGreaterThan(0);
@@ -109,34 +106,34 @@ describe("vDot / vCross / vLenSq2", () => {
     expect(vCross(v(1200, 1200), v(600, 600))).toBe(0);
   });
 
-  it("compare distance against radius without a square root", () => {
-    const near = v(300, 0);
-    const far = v(1200, 0);
-    const r = fx(500);
-    // Radius squared in the same shifted units the helpers work in.
-    const rSq = vLenSq2(vec(r, 0 as Fx));
-    expect(vLenSq2(near) < rSq).toBe(true);
-    expect(vLenSq2(far) < rSq).toBe(false);
+  it("return fx world units, so a dot is a length times a length", () => {
+    // 1200 u onto a unit vector IS 1200 u, not 1200 u in some shifted scale.
+    expect(toFloat(vDot(v(1200, 0), v(1, 0)))).toBeCloseTo(1200, 3);
+    expect(toFloat(vDot(v(30, 40), v(30, 40)))).toBeCloseTo(2500, 3);
+    expect(toFloat(vCross(v(0, 1), v(1, 0)))).toBeCloseTo(-1, 3);
   });
 
-  it("agree with vLen: vLenSq2(a) ≈ vLenSq2 of a vector of length |a|", () => {
-    const a = v(1600, 1200); // |a| = 2000
-    expect(vLenSq2(a)).toBeCloseTo(vLenSq2(v(2000, 0)), -2);
+  it("keeps a near-zero cross off zero — no per-term rounding bias to fall through", () => {
+    // Two arena-scale vectors a hair off collinear: the sign is the answer.
+    const a = vec(fx(1200), fx(1200));
+    const b = vec(fx(600), (fx(600) + 3) as Fx);
+    expect(vCross(a, b)).toBeGreaterThan(0);
+    expect(vCross(b, a)).toBeLessThan(0);
   });
 });
 
 describe("vNorm", () => {
   it("returns a unit vector at arena scale (where the reciprocal spelling loses ~15%)", () => {
-    for (const a of [v(1200, 0), v(-900, 1600), v(2400, -2400), v(5, 12)]) {
-      // Tolerance is the sub-1/256 input precision the helpers drop, not slop.
-      expect(Math.abs(toFloat(vLen(vNorm(a))) - 1)).toBeLessThan(0.01);
+    for (const a of [v(1200, 0), v(-900, 1600), v(2400, -2400), v(5, 12), v(0, -1)]) {
+      // Two raw units out of 65536 — it was 0.01 when the operands lost 8 bits.
+      expect(Math.abs(toFloat(vLen(vNorm(a))) - 1)).toBeLessThan(2 / 65536);
     }
   });
 
   it("preserves direction", () => {
     const n = vNorm(v(-900, 1200)); // 3-4-5 scaled: expect (-0.6, 0.8)
-    expect(toFloat(n.x)).toBeCloseTo(-0.6, 2);
-    expect(toFloat(n.y)).toBeCloseTo(0.8, 2);
+    expect(toFloat(n.x)).toBeCloseTo(-0.6, 4);
+    expect(toFloat(n.y)).toBeCloseTo(0.8, 4);
   });
 
   it("maps the zero vector to zero rather than NaN", () => {
@@ -196,9 +193,12 @@ describe("determinism", () => {
     expect(Number.isInteger(vCross(a, b))).toBe(true);
   });
 
-  it("drops at most the documented sub-1/256-unit precision", () => {
+  it("drops NOTHING below the square bound — the input's last bit survives", () => {
+    // This used to be a 1/256-unit tolerance, because every operand was divided
+    // by 256 before squaring. The contract now is the floor of the true root.
     const a = vec(fxFromFloat(1000.9999), fxFromFloat(0));
-    expect(Math.abs(toFloat(vLen(a)) - 1000.9999)).toBeLessThan(2 * UNIT);
+    expect(vLen(a)).toBe(a.x);
+    expect(vLen(vec(fxFromFloat(0.2222), fxFromFloat(0)))).toBe(fxFromFloat(0.2222));
   });
 
   it("is repeatable — same inputs, identical bits", () => {
