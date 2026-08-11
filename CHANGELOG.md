@@ -74,10 +74,8 @@ old ceilings — so a hash that moves does so through the RNG stream.
    32767.99 u; `±Infinity` is not an integer, so it widens every comparison in
    the loop. A game's narrowphase suite ran 3x faster seeded from element 0.
 4. **Delete range-driven reformulations.** Grep for comments citing overflow,
-   16.16, int32, 32768 or 2^21, for `0x7fffffff` used as an `Fx` sentinel (it is
-   32767.99 u — use `±Infinity` for a min/max sweep seed), for divide-before-
-   multiply written to "stay in range", and for distance-instead-of-squared
-   written to dodge an overflow. All of them are now working around a limit that
+   16.16, int32, 32768 or 2^21, for divide-before-multiply written to "stay in
+   range", and for distance-instead-of-squared written to dodge an overflow. All of them are now working around a limit that
    is not there, and several are less accurate than the direct spelling.
 5. **Grep for bitwise operators applied to an `Fx`** — `>>`, `<<`, `| 0`, `~~`,
    `>>> 0`. Each one re-imposes the ±32768 u wall. Constants that fold at build
