@@ -112,24 +112,18 @@ export const vScale = (a: Vec2, s: Fx): Vec2 => vec(mul(a.x, s), mul(a.y, s));
  */
 const VEC_SHIFT_DIV = 256; // 2^8, applied by division + trunc so it is sign-symmetric
 
-/** Component magnitude past which /256 no longer keeps the square under 2^53. */
-const WIDE_ABOVE = 0x400000000; // 2^34 fx = 262144 u, where (2^34/256)² = 2^52
-
 /**
- * How far to divide the components before squaring them. 256 at every scale a
- * game actually reaches — so these helpers are unchanged there — stepping to
- * 65536 only past 262144 u, where the coarser input is still far below the
- * rounding of the answer itself. Without the step these would carry a silent
- * ceiling, which is the class of bug this whole family exists to remove.
+ * Past 262144 u a /256 pre-divide is no longer enough to keep the square exact,
+ * and each helper below falls through to a `…Wide` spelling that divides by
+ * 65536 instead — where 1 u is already far under the rounding of the answer.
  *
- * Spelled at fixed arity, twice: a rest parameter allocates an array on every
- * call, and these run per entity pair per tick (measured at +7% sim CPU).
+ * The fall-through is decided by testing the SQUARE that was going to be
+ * computed anyway, not the four inputs: one comparison on a live value instead
+ * of four on cold ones, and the divisor stays a literal so it still folds. Both
+ * matter — these run per flow segment per ship per tick, and the input-testing
+ * spelling measured ~9% of sim CPU on the current-heavy encounters.
  */
-const preDiv2 = (a: Fx, b: Fx): number =>
-  a >= WIDE_ABOVE || a <= -WIDE_ABOVE || b >= WIDE_ABOVE || b <= -WIDE_ABOVE ? 65536 : VEC_SHIFT_DIV;
-
-const preDiv4 = (a: Fx, b: Fx, c: Fx, d: Fx): number =>
-  preDiv2(a, b) === VEC_SHIFT_DIV && preDiv2(c, d) === VEC_SHIFT_DIV ? VEC_SHIFT_DIV : 65536;
+const WIDE_DIV = 65536;
 
 /**
  * `a · b` as an exact DOUBLE in shifted-fx units — NOT a storable `Fx`.
@@ -138,13 +132,16 @@ const preDiv4 = (a: Fx, b: Fx, c: Fx, d: Fx): number =>
  * an Fx op. Two dots compare only when both were formed at the same scale.
  */
 export const vDot = (a: Vec2, b: Vec2): number => {
-  const d = preDiv4(a.x, a.y, b.x, b.y);
-  const ax = Math.trunc(a.x / d);
-  const ay = Math.trunc(a.y / d);
-  const bx = Math.trunc(b.x / d);
-  const by = Math.trunc(b.y / d);
-  return ax * bx + ay * by;
+  const ax = Math.trunc(a.x / 256);
+  const ay = Math.trunc(a.y / 256);
+  const bx = Math.trunc(b.x / 256);
+  const by = Math.trunc(b.y / 256);
+  const q = ax * bx + ay * by;
+  return q > -EXACT && q < EXACT ? q : dotWide(a, b);
 };
+
+const dotWide = (a: Vec2, b: Vec2): number =>
+  Math.trunc(a.x / WIDE_DIV) * Math.trunc(b.x / WIDE_DIV) + Math.trunc(a.y / WIDE_DIV) * Math.trunc(b.y / WIDE_DIV);
 
 /**
  * `a × b`, the 2D scalar cross, as an exact DOUBLE in shifted-fx units —
@@ -153,13 +150,16 @@ export const vDot = (a: Vec2, b: Vec2): number => {
  * loses the bits the sign rests on and the winding flips.
  */
 export const vCross = (a: Vec2, b: Vec2): number => {
-  const d = preDiv4(a.x, a.y, b.x, b.y);
-  const ax = Math.trunc(a.x / d);
-  const ay = Math.trunc(a.y / d);
-  const bx = Math.trunc(b.x / d);
-  const by = Math.trunc(b.y / d);
-  return ax * by - ay * bx;
+  const ax = Math.trunc(a.x / 256);
+  const ay = Math.trunc(a.y / 256);
+  const bx = Math.trunc(b.x / 256);
+  const by = Math.trunc(b.y / 256);
+  const q = ax * by - ay * bx;
+  return q > -EXACT && q < EXACT ? q : crossWide(a, b);
 };
+
+const crossWide = (a: Vec2, b: Vec2): number =>
+  Math.trunc(a.x / WIDE_DIV) * Math.trunc(b.y / WIDE_DIV) - Math.trunc(a.y / WIDE_DIV) * Math.trunc(b.x / WIDE_DIV);
 
 /**
  * Squared length as an exact DOUBLE, arena-safe — same units as `vDot`, and the
@@ -170,20 +170,26 @@ export const vLenSq2 = (a: Vec2): number => vDot(a, a);
 
 /** |a| in fixed-point, correct across the full Fx range. */
 export const vLen = (a: Vec2): Fx => {
-  const d = preDiv2(a.x, a.y);
-  const x = Math.trunc(a.x / d);
-  const y = Math.trunc(a.y / d);
-  return (isqrt(x * x + y * y) * d) as Fx;
+  const x = Math.trunc(a.x / 256);
+  const y = Math.trunc(a.y / 256);
+  const q = x * x + y * y;
+  return (q < EXACT ? isqrt(q) * 256 : magWide(a.x, a.y)) as Fx;
+};
+
+const magWide = (dx: Fx, dy: Fx): Fx => {
+  const x = Math.trunc(dx / WIDE_DIV);
+  const y = Math.trunc(dy / WIDE_DIV);
+  return (isqrt(x * x + y * y) * WIDE_DIV) as Fx;
 };
 
 /** |a − b| in fixed-point, correct across the full Fx range. */
 export const vDist = (a: Vec2, b: Vec2): Fx => {
   const dx = (a.x - b.x) as Fx;
   const dy = (a.y - b.y) as Fx;
-  const d = preDiv2(dx, dy);
-  const x = Math.trunc(dx / d);
-  const y = Math.trunc(dy / d);
-  return (isqrt(x * x + y * y) * d) as Fx;
+  const x = Math.trunc(dx / 256);
+  const y = Math.trunc(dy / 256);
+  const q = x * x + y * y;
+  return (q < EXACT ? isqrt(q) * 256 : magWide(dx, dy)) as Fx;
 };
 
 /**
@@ -193,7 +199,7 @@ export const vDist = (a: Vec2, b: Vec2): Fx => {
  * space instead. Zero-length ⇒ (0, 0).
  */
 export const vNorm = (a: Vec2): Vec2 => {
-  const d = preDiv2(a.x, a.y);
+  const d = Math.trunc(a.x / 256) ** 2 + Math.trunc(a.y / 256) ** 2 < EXACT ? 256 : WIDE_DIV;
   const x = Math.trunc(a.x / d);
   const y = Math.trunc(a.y / d);
   const l = isqrt(x * x + y * y);
@@ -223,7 +229,7 @@ export const vProj = (rel: Vec2, ab: Vec2): Fx => {
  * clamps to 0 rather than going imaginary.
  */
 export const pythLeg = (hyp: Fx, leg: Fx): Fx => {
-  const d = preDiv2(hyp, leg);
+  const d = Math.trunc(hyp / 256) ** 2 < EXACT ? 256 : WIDE_DIV;
   const h = Math.trunc(hyp / d);
   const l = Math.trunc(leg / d);
   const q = h * h - l * l;

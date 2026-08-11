@@ -35,11 +35,18 @@ counter clamped so it could not wrap.
   it does not flip sign. A silent catastrophe became a bounded rounding error.
 - **`vLen` / `vDist` / `vNorm` / `vDot` / `vCross` / `vProj` / `pythLeg` lost
   their ceiling.** They still divide components by 256 before squaring at every
-  scale a game reaches — identical results — and step to 65536 only past
-  262144 u, where 1 u is already far below the rounding of the answer. They are
-  spelled at fixed arity deliberately: a rest parameter allocated an array per
-  call and cost 7% of sim CPU. At fixed arity the cost is inside run-to-run
-  noise.
+  scale a game reaches — identical results — and fall through to a /65536
+  spelling only past 262144 u, where 1 u is already far below the rounding of
+  the answer.
+  - **How the fall-through is decided is load-bearing, so do not "simplify" it.**
+    It tests the SQUARE that was going to be computed anyway, rather than the
+    inputs, and the divisor stays a literal. Two earlier spellings were measured
+    and rejected against a real game: a rest-parameter `preDiv(...cs)` allocated
+    an array per call (+7% sim CPU), and testing the four inputs with the
+    divisor passed as a variable stopped the engine folding `/ 256` (+6 to +13%
+    on the current-heavy encounters, which call `vLen` once per flow segment per
+    ship). Guarding on the live square costs one comparison and lands inside
+    run-to-run noise.
 - **`vLenSq` is kept and is no longer a trap at arena scale** — exact to
   ~1448 u instead of ~181 u. `vLenSq2` remains the right call where the
   magnitude is unbounded.
