@@ -1,13 +1,17 @@
 /**
- * Magnitude helpers at WORLD SCALE — the range the naive `mul(x,x) + mul(y,y)`
- * spelling silently wraps in. These are the tests that would have caught the
- * "ship teleports off an asteroid it isn't touching" bug reported from a game
- * with a 1200-unit arena radius.
+ * Magnitude helpers at WORLD SCALE, and the range an Fx can hold. These are the
+ * tests that would have caught the "ship teleports off an asteroid it isn't
+ * touching" bug reported from a game with a 1200-unit arena radius, plus the
+ * ones covering values past the 32768 u wall the int32 spelling used to have.
  */
 import { describe, expect, it } from "vitest";
 import {
   FX_ONE,
+  add,
   fx,
+  fxIsExact,
+  mul,
+  toInt,
   fxFromFloat,
   toFloat,
   vDist,
@@ -59,11 +63,22 @@ describe("vLen", () => {
 });
 
 describe("vLenSq", () => {
-  it("is retained but documented as small-vector only — it wraps past ~181u", () => {
+  it("is exact out to the ~1448 u square bound, which covers a real arena", () => {
     expect(toFloat(vLenSq(v(3, 4)))).toBeCloseTo(25, 2);
-    // Documented failure: NOT the true 1_440_000. Pinned so the hazard the
-    // JSDoc warns about is visible rather than folklore.
-    expect(toFloat(vLenSq(v(1200, 0)))).not.toBeCloseTo(1_440_000, 0);
+    // The 181 u wall is gone: this used to wrap negative, and is now the truth.
+    expect(toFloat(vLenSq(v(1200, 0)))).toBeCloseTo(1_440_000, 0);
+    expect(toFloat(vLenSq(v(1448, 0)))).toBeCloseTo(1448 * 1448, 0);
+  });
+
+  it("degrades past the bound by rounding, never by flipping sign", () => {
+    // The reason vLenSq survives at all: over-range now costs low bits, where it
+    // used to cost the answer. A caller comparing against a radius still sorts.
+    const a = vec(fxFromFloat(7001.37), fxFromFloat(0));
+    const truth = 7001.37 ** 2;
+    const got = toFloat(vLenSq(a));
+    expect(got).toBeGreaterThan(0);
+    expect(Math.abs(got - truth) / truth).toBeLessThan(1e-6);
+    expect(vLenSq(v(20000, 20000))).toBeGreaterThan(vLenSq(v(19000, 19000)));
   });
 });
 
@@ -180,11 +195,40 @@ describe("determinism", () => {
 });
 
 describe("scale ceiling", () => {
-  it("holds across the documented Fx range (|value| < 32768 u)", () => {
-    // Near the ceiling — chosen so the RESULT (the diagonal) is representable too.
+  it("holds across the old int32 range (|value| < 32768 u)", () => {
     const big = 23000;
     expect(toFloat(vLen(v(big, 0)))).toBeCloseTo(big, 0);
     expect(toFloat(vLen(v(big, big)))).toBeCloseTo(big * Math.SQRT2, -1);
     expect(FX_ONE).toBe(65536);
+  });
+
+  it("and keeps holding far past it — an Fx is an exact integer, not an int32", () => {
+    // 32768 u was where `| 0` wrapped, and every magnitude that met it needed its
+    // own workaround. These are the shapes those workarounds existed to dodge.
+    for (const u of [40_000, 120_000, 500_000, 1_000_000]) {
+      expect(fx(u)).toBe(u * 65536);
+      expect(toInt(fx(u))).toBe(u);
+      expect(toFloat(vLen(v(u, 0)))).toBeCloseTo(u, 0);
+      expect(fx(u)).toBeGreaterThan(0);
+    }
+    // The Throat's spiral: an arclength coordinate longer than the arena is wide.
+    const arc = fx(120_000);
+    expect(toFloat(add(arc, fx(1500)))).toBeCloseTo(121_500, 0);
+    expect(toFloat(vLen(v(500_000, 500_000)))).toBeCloseTo(500_000 * Math.SQRT2, -1);
+  });
+
+  it("scales a five-figure pool by a fraction without the divide-first dance", () => {
+    // A boss health pool routed through fx()/mul(): the shape that came back
+    // negative and tripped a `coreHp < 0` invariant.
+    expect(toFloat(mul(fx(14_000), fxFromFloat(0.6667)))).toBeCloseTo(9333.8, 0);
+    expect(mul(fx(14_000), fxFromFloat(0.6667))).toBeGreaterThan(0);
+  });
+
+  it("still returns exact integers at those magnitudes (no float leak)", () => {
+    for (const r of [fx(500_000), vLen(v(300_000, 400_000)), mul(fx(120_000), fxFromFloat(0.25))]) {
+      expect(fxIsExact(r as number)).toBe(true);
+    }
+    expect(fxIsExact(1.5)).toBe(false);
+    expect(fxIsExact(2 ** 54)).toBe(false);
   });
 });
