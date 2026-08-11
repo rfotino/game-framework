@@ -6,10 +6,17 @@
  * cross-platform determinism and golden-replay verification of future ports.
  * Integer math is exact everywhere. Convert to float only at the render boundary.
  *
- * Range: |value| < 32768 world units. Fine for 2D games; tile coords and screen
- * spaces fit comfortably. Watch mul() of large magnitudes (see note below): a
- * SQUARED world-scale quantity does not fit, which is why the magnitude helpers
- * (vLen/vDist/vDot/vNorm/…) never form one.
+ * An Fx is an EXACT INTEGER, not an int32. It is held in a float64, which
+ * represents every integer below 2^53 exactly, so the range is |value| < 2^37
+ * world units and arithmetic stays bit-identical on every platform: IEEE-754
+ * pins add, subtract, multiply and floor exactly, and an int64 port reproduces
+ * these results directly. Nothing here relies on 32-bit wrapping.
+ *
+ * The ceiling that remains is on the PRODUCT, not the value: `mul`, `div` and
+ * the magnitude helpers need their intermediate below 2^53, and each states its
+ * own bound. Past it a result sheds low bits deterministically — it does NOT
+ * wrap to a negative number, so the failure mode is a rounding error rather
+ * than a sign flip, and it is bounded by the magnitude that caused it.
  */
 
 export type Fx = number & { readonly __fx: unique symbol };
@@ -17,37 +24,42 @@ export type Fx = number & { readonly __fx: unique symbol };
 export const FX_SHIFT = 16;
 export const FX_ONE = (1 << FX_SHIFT) as Fx;
 
-/** Int -> fixed. */
-export const fx = (n: number): Fx => ((n | 0) << FX_SHIFT) as Fx;
+/** The exact-integer ceiling of a float64. Every bound below is stated against it. */
+const EXACT = 9007199254740992; // 2^53
 
-/** Float -> fixed. Use ONLY at boundaries (content loading, tuning params). */
-export const fxFromFloat = (f: number): Fx => Math.round(f * FX_ONE) as Fx;
+/** Int -> fixed. Multiplies rather than shifts: `<<` is int32 and wraps past 32768 u. */
+export const fx = (n: number): Fx => ((n | 0) * FX_ONE) as Fx;
+
+/**
+ * Float -> fixed. Use ONLY at boundaries (content loading, tuning params).
+ *
+ * The `+ 0` here and on `neg`/`mul`/`div` collapses negative zero, which `| 0`
+ * used to do as a side effect. A `-0` compares equal to `0` in arithmetic but
+ * not under `Object.is`, and JSON round-trips it to `0` — so left alone it makes
+ * a state differ from itself across the wire while every value in it matches.
+ */
+export const fxFromFloat = (f: number): Fx => (Math.round(f * FX_ONE) + 0) as Fx;
 
 /** Fixed -> float. RENDER BOUNDARY ONLY. */
 export const toFloat = (a: Fx): number => a / FX_ONE;
 
-/** Fixed -> whole world units (floor). */
-export const toInt = (a: Fx): number => a >> FX_SHIFT;
+/** Fixed -> whole world units (floor). Not `>>`: that is int32 and wraps past 32768 u. */
+export const toInt = (a: Fx): number => Math.floor(a / FX_ONE);
 
-export const add = (a: Fx, b: Fx): Fx => ((a + b) | 0) as Fx;
-export const sub = (a: Fx, b: Fx): Fx => ((a - b) | 0) as Fx;
-export const neg = (a: Fx): Fx => (-a | 0) as Fx;
+export const add = (a: Fx, b: Fx): Fx => (a + b) as Fx;
+export const sub = (a: Fx, b: Fx): Fx => (a - b) as Fx;
+export const neg = (a: Fx): Fx => (-a + 0) as Fx;
 
 /**
- * Multiply. The intermediate product is formed in float64 (exact below 2^53),
- * but the RESULT is truncated to signed 32-bit — so `mul` is only correct while
- * |a*b| stays under 2^31 fx, i.e. |result| < 32768 world units², the same range
- * as any other Fx value.
- *
- * WATCH squaring large magnitudes: `mul(d, d)` for d beyond ~181 world units
- * overflows silently and wraps to garbage. For squared lengths and dot products
- * at arena scale use `vDot` / `vLen` / `vDist` below, which never form an
- * over-range product.
+ * Multiply. The product is formed in float64 and is exact while |a·b| < 2^53,
+ * i.e. |a| · |b| < 2^21 world units² — so `mul(d, d)` is exact to d ≈ 1448 u.
+ * Past that it rounds rather than wraps. For squared lengths and dot products at
+ * arena scale use `vDot` / `vLen` / `vDist` below, which never form the product.
  */
-export const mul = (a: Fx, b: Fx): Fx => (Math.floor((a * b) / FX_ONE) | 0) as Fx;
+export const mul = (a: Fx, b: Fx): Fx => (Math.floor((a * b) / FX_ONE) + 0) as Fx;
 
-/** Divide (b != 0). */
-export const div = (a: Fx, b: Fx): Fx => (Math.floor((a * FX_ONE) / b) | 0) as Fx;
+/** Divide (b != 0). The numerator is exact while |a| < 2^21 world units. */
+export const div = (a: Fx, b: Fx): Fx => (Math.floor((a * FX_ONE) / b) + 0) as Fx;
 
 export const abs = (a: Fx): Fx => (a < 0 ? -a : a) as Fx;
 export const min = (a: Fx, b: Fx): Fx => (a < b ? a : b);
@@ -67,11 +79,11 @@ const isqrt = (n: number): number => {
   return x;
 };
 
-/** Integer sqrt of a fixed value, result fixed. Deterministic (Newton, int-only). */
+/** Integer sqrt of a fixed value, result fixed. Exact while |a| < 2^21 world units. */
 export const sqrt = (a: Fx): Fx => {
   if (a <= 0) return 0 as Fx;
   // sqrt(a / 2^16) * 2^16 = sqrt(a * 2^16) = isqrt(a << 16)
-  return (isqrt(a * FX_ONE) | 0) as Fx; // a * FX_ONE is exact below 2^53
+  return isqrt(a * FX_ONE) as Fx;
 };
 
 export interface Vec2 {
@@ -87,45 +99,67 @@ export const vScale = (a: Vec2, s: Fx): Vec2 => vec(mul(a.x, s), mul(a.y, s));
 /**
  * Magnitude helpers, arena-safe.
  *
- * A squared length in 16.16 leaves the Fx range once the length passes
- * √(2^31 / 65536) ≈ 181 world units, so the naive `mul(x,x) + mul(y,y)` wraps
- * silently — fatal in any world bigger than a few screens. Everything below
- * shifts each component down 8 bits BEFORE multiplying, so the product stays
- * well under 2^53 and exact, then shifts back. Integer-only, so determinism
- * holds across platforms and future ports.
+ * A squared length leaves the exact-integer range once the length passes
+ * √(2^53) fx ≈ 1448 world units, so the naive `mul(x,x) + mul(y,y)` spelling
+ * starts shedding the low bits a comparison depends on — fatal in any world
+ * bigger than a few screens. Everything below divides each component down
+ * BEFORE multiplying, so the product stays under 2^53 and exact, then scales
+ * back. Integer-only, so determinism holds across platforms and future ports.
  *
  * The trade: sub-1/256-unit precision is dropped from the inputs. That is
  * negligible for distances, collision and normals, and it is the price of
- * correctness across the documented |value| < 32768 u range.
+ * being correct at arena scale.
  */
 const VEC_SHIFT_DIV = 256; // 2^8, applied by division + trunc so it is sign-symmetric
 
 /**
+ * Past 262144 u a /256 pre-divide is no longer enough to keep the square exact,
+ * and each helper below falls through to a `…Wide` spelling that divides by
+ * 65536 instead — where 1 u is already far under the rounding of the answer.
+ *
+ * The fall-through is decided by testing the SQUARE that was going to be
+ * computed anyway, not the inputs: one comparison on a live value instead of
+ * four on cold ones, and the divisor stays a literal so it still folds. Both
+ * matter — these are the hottest functions here, and the input-testing spelling
+ * measured up to 13% of sim CPU in a game that calls `vLen` per entity pair.
+ */
+const WIDE_DIV = 65536;
+
+/**
  * `a · b` as an exact DOUBLE in shifted-fx units — NOT a storable `Fx`.
- * Deliberately typed `number`: at world scale the true value does not fit int32,
- * so use it for COMPARISONS and RATIOS only, never as an operand to an Fx op.
+ * Deliberately typed `number`: at world scale the true value dwarfs its
+ * operands, so use it for COMPARISONS and RATIOS only, never as an operand to
+ * an Fx op. Two dots compare only when both were formed at the same scale.
  */
 export const vDot = (a: Vec2, b: Vec2): number => {
-  const ax = Math.trunc(a.x / VEC_SHIFT_DIV);
-  const ay = Math.trunc(a.y / VEC_SHIFT_DIV);
-  const bx = Math.trunc(b.x / VEC_SHIFT_DIV);
-  const by = Math.trunc(b.y / VEC_SHIFT_DIV);
-  return ax * bx + ay * by;
+  const ax = Math.trunc(a.x / 256);
+  const ay = Math.trunc(a.y / 256);
+  const bx = Math.trunc(b.x / 256);
+  const by = Math.trunc(b.y / 256);
+  const q = ax * bx + ay * by;
+  return q > -EXACT && q < EXACT ? q : dotWide(a, b);
 };
+
+const dotWide = (a: Vec2, b: Vec2): number =>
+  Math.trunc(a.x / WIDE_DIV) * Math.trunc(b.x / WIDE_DIV) + Math.trunc(a.y / WIDE_DIV) * Math.trunc(b.y / WIDE_DIV);
 
 /**
  * `a × b`, the 2D scalar cross, as an exact DOUBLE in shifted-fx units —
  * arena-safe, and (like `vDot`) for signs and ratios only. Point-in-polygon and
  * winding tests need this: both operands are world-scale, so the Fx spelling
- * wraps and the winding flips.
+ * loses the bits the sign rests on and the winding flips.
  */
 export const vCross = (a: Vec2, b: Vec2): number => {
-  const ax = Math.trunc(a.x / VEC_SHIFT_DIV);
-  const ay = Math.trunc(a.y / VEC_SHIFT_DIV);
-  const bx = Math.trunc(b.x / VEC_SHIFT_DIV);
-  const by = Math.trunc(b.y / VEC_SHIFT_DIV);
-  return ax * by - ay * bx;
+  const ax = Math.trunc(a.x / 256);
+  const ay = Math.trunc(a.y / 256);
+  const bx = Math.trunc(b.x / 256);
+  const by = Math.trunc(b.y / 256);
+  const q = ax * by - ay * bx;
+  return q > -EXACT && q < EXACT ? q : crossWide(a, b);
 };
+
+const crossWide = (a: Vec2, b: Vec2): number =>
+  Math.trunc(a.x / WIDE_DIV) * Math.trunc(b.y / WIDE_DIV) - Math.trunc(a.y / WIDE_DIV) * Math.trunc(b.x / WIDE_DIV);
 
 /**
  * Squared length as an exact DOUBLE, arena-safe — same units as `vDot`, and the
@@ -136,16 +170,26 @@ export const vLenSq2 = (a: Vec2): number => vDot(a, a);
 
 /** |a| in fixed-point, correct across the full Fx range. */
 export const vLen = (a: Vec2): Fx => {
-  const x = Math.trunc(a.x / VEC_SHIFT_DIV);
-  const y = Math.trunc(a.y / VEC_SHIFT_DIV);
-  return ((isqrt(x * x + y * y) * VEC_SHIFT_DIV) | 0) as Fx;
+  const x = Math.trunc(a.x / 256);
+  const y = Math.trunc(a.y / 256);
+  const q = x * x + y * y;
+  return (q < EXACT ? isqrt(q) * 256 : magWide(a.x, a.y)) as Fx;
+};
+
+const magWide = (dx: Fx, dy: Fx): Fx => {
+  const x = Math.trunc(dx / WIDE_DIV);
+  const y = Math.trunc(dy / WIDE_DIV);
+  return (isqrt(x * x + y * y) * WIDE_DIV) as Fx;
 };
 
 /** |a − b| in fixed-point, correct across the full Fx range. */
 export const vDist = (a: Vec2, b: Vec2): Fx => {
-  const x = Math.trunc((a.x - b.x) / VEC_SHIFT_DIV);
-  const y = Math.trunc((a.y - b.y) / VEC_SHIFT_DIV);
-  return ((isqrt(x * x + y * y) * VEC_SHIFT_DIV) | 0) as Fx;
+  const dx = (a.x - b.x) as Fx;
+  const dy = (a.y - b.y) as Fx;
+  const x = Math.trunc(dx / 256);
+  const y = Math.trunc(dy / 256);
+  const q = x * x + y * y;
+  return (q < EXACT ? isqrt(q) * 256 : magWide(dx, dy)) as Fx;
 };
 
 /**
@@ -155,8 +199,9 @@ export const vDist = (a: Vec2, b: Vec2): Fx => {
  * space instead. Zero-length ⇒ (0, 0).
  */
 export const vNorm = (a: Vec2): Vec2 => {
-  const x = Math.trunc(a.x / VEC_SHIFT_DIV);
-  const y = Math.trunc(a.y / VEC_SHIFT_DIV);
+  const d = Math.trunc(a.x / 256) ** 2 + Math.trunc(a.y / 256) ** 2 < EXACT ? 256 : WIDE_DIV;
+  const x = Math.trunc(a.x / d);
+  const y = Math.trunc(a.y / d);
   const l = isqrt(x * x + y * y);
   if (l <= 0) return vec(0 as Fx, 0 as Fx);
   return vec(Math.round((x * FX_ONE) / l) as Fx, Math.round((y * FX_ONE) / l) as Fx);
@@ -184,16 +229,25 @@ export const vProj = (rel: Vec2, ab: Vec2): Fx => {
  * clamps to 0 rather than going imaginary.
  */
 export const pythLeg = (hyp: Fx, leg: Fx): Fx => {
-  const h = Math.trunc(hyp / VEC_SHIFT_DIV);
-  const l = Math.trunc(leg / VEC_SHIFT_DIV);
-  const d = h * h - l * l;
-  return (d <= 0 ? 0 : (isqrt(d) * VEC_SHIFT_DIV) | 0) as Fx;
+  const d = Math.trunc(hyp / 256) ** 2 < EXACT ? 256 : WIDE_DIV;
+  const h = Math.trunc(hyp / d);
+  const l = Math.trunc(leg / d);
+  const q = h * h - l * l;
+  return (q <= 0 ? 0 : isqrt(q) * d) as Fx;
 };
 
 /**
- * Squared length as an `Fx`. DANGER: only valid while |a| < 181 world units —
- * beyond that the square leaves the Fx range and wraps silently. Kept for small
- * local vectors (screen-space, per-tick deltas) where it is exact; anywhere the
- * magnitude can reach world scale, use `vLenSq2` (double) or `vLen`.
+ * Squared length as an `Fx`. DANGER: only valid while |a| < 1448 world units —
+ * past that the square leaves the exact-integer range and sheds low bits. Kept
+ * for small local vectors (screen-space, per-tick deltas) where it is exact;
+ * anywhere the magnitude can reach world scale, use `vLenSq2` or `vLen`.
  */
 export const vLenSq = (a: Vec2): Fx => add(mul(a.x, a.x), mul(a.y, a.y));
+
+/**
+ * Whether `v` is still an Fx this arithmetic can hold exactly. For a game's
+ * state invariants, not for a tick: a value that fails this took a float in
+ * through some boundary, and a non-integer Fx is the one thing here that drifts
+ * per-platform instead of being reproducible.
+ */
+export const fxIsExact = (v: number): boolean => Number.isInteger(v) && v > -EXACT && v < EXACT;

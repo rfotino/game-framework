@@ -3,6 +3,94 @@
 Entries newest-first. Every entry that requires action in game repos includes a
 **Migration** section written as agent-executable instructions.
 
+## v0.3.0 — `Fx` is an exact integer, not an int32
+
+`FX_SHIFT` stays at 16 and `FX_ONE` stays at 65536: **the point does not move,
+so no value changes meaning and no game needs to re-tune anything.** What moves
+is the container.
+
+Every op used to end in `| 0`, capping an `Fx` at int32 — |value| < 32768 world
+units — and a product past that wrapped NEGATIVE. It wrapped *deterministically*,
+so every machine agreed on the wrong answer and no golden-replay hash could ever
+catch it. The `| 0` is gone. An `Fx` is now an exact integer held in a float64,
+which uses all 53 of the bits that represent integers exactly, so the range is
+|value| < 2^37 u.
+
+The trade this makes is worth stating plainly, because the obvious alternative
+is to move the point instead. A JS number has 53 exact integer bits and the old
+type used 32 of them; spending the other 21 on range costs nothing, whereas
+moving the point buys range by spending resolution the game may well be using.
+Widen the container first; move the point only when the host type is genuinely
+out of bits.
+
+- **Determinism is unchanged, and so is every existing result.** IEEE-754 pins
+  add, subtract, multiply and floor exactly, and integers below 2^53 are exact,
+  so the arithmetic is still bit-identical on every platform. Below the old
+  int32 ceiling the new ops return exactly what the old ones did — verified by
+  running a game's full test suite, headless sim, playtest and render
+  command-stream baseline against both: **every hash identical, zero
+  rebaseline.** An int64 port reproduces these results directly; nothing here
+  relies on 32-bit wrapping any more, which it previously did.
+- **Over-range now rounds instead of wrapping.** `mul` is exact while
+  |a|·|b| < 2^21 u² (so `mul(d, d)` to d ≈ 1448 u, up from 181 u). Past that it
+  sheds low bits at a relative error around 1e-9 that *shrinks* with magnitude —
+  it does not flip sign. A silent catastrophe became a bounded rounding error.
+- **`vLen` / `vDist` / `vNorm` / `vDot` / `vCross` / `vProj` / `pythLeg` lost
+  their ceiling.** They still divide components by 256 before squaring at every
+  scale a game reaches — identical results — and fall through to a /65536
+  spelling only past 262144 u, where 1 u is already far below the rounding of
+  the answer.
+  - **How the fall-through is decided is load-bearing, so do not "simplify" it.**
+    It tests the SQUARE that was going to be computed anyway rather than the
+    inputs, and the divisor stays a literal. Two earlier spellings were measured
+    and rejected: a rest parameter allocated an array per call (+7% sim CPU),
+    and testing the inputs with the divisor passed as a variable stopped the
+    engine folding `/ 256` (up to +13% in a game that calls `vLen` per entity
+    pair per tick). Guarding on the live square costs one comparison and lands
+    inside run-to-run noise.
+- **`vLenSq` is kept and is no longer a trap at arena scale** — exact to
+  ~1448 u instead of ~181 u. `vLenSq2` remains the right call where the
+  magnitude is unbounded.
+- **New: `fxIsExact(v)`** — whether a value is still an integer this arithmetic
+  can hold. For a game's state invariants, not for a tick. With `| 0` gone,
+  nothing coerces a leaked float back to an integer, and a non-integer `Fx` is
+  the one thing here that drifts per-platform instead of being reproducible.
+  This is the guard that replaces the coercion.
+- **Negative zero is collapsed** in `neg` / `mul` / `div` / `fxFromFloat`, which
+  `| 0` did as a side effect. A `-0` is arithmetically equal to `0` but not under
+  `Object.is`, and JSON round-trips it to `0` — left alone it makes a serialized
+  state differ from itself while every value in it matches.
+- **`fx()` multiplies instead of shifting and `toInt()` floors instead of
+  shifting** — `<<` and `>>` are int32 operators and would have re-imposed the
+  wall inside the widened type.
+
+### Migration
+
+Bump the pin. Then, in each game repo:
+
+1. `grep -rn "Int32Array" src/` — any typed array **storing Fx values** must
+   become `Float64Array`, or it silently truncates the values this release
+   exists to permit. (Typed arrays holding indices, counts or colours are fine.)
+2. `grep -rnE "(>>|<<|\| 0)" src/sim/` — bitwise operators coerce to int32.
+   On an `Fx` they re-impose the old wall inside the new type. Replace `x >> k`
+   with `Math.floor(x / 2 ** k)` and `x << k` with `x * 2 ** k`. Shifts on
+   indices, hashes, colours and flags are unaffected.
+3. Sentinels spelled `0x7fffffff` still work but no longer mean "larger than any
+   Fx". Where one seeds a min/max sweep, prefer `Infinity` or
+   `Number.MAX_SAFE_INTEGER` and re-read any that is asserted against.
+4. Range-guard invariants keyed to the 32768 u wall can be relaxed or deleted.
+   Where one asks "is this still fixed-point", `fxIsExact` is the direct
+   spelling; a plain `Number.isInteger` check is already most of it.
+5. Workarounds that reformulated a magnitude to dodge the wall — divide-before-
+   multiply, integer-scaled shares, arclength shift parameters, sums promoted to
+   `number` — can be written the direct way again. Each of those is a behaviour
+   change (a different rounding), so land them **after** the pin bump and
+   separately from it: the bump itself moves no hash, and keeping that true is
+   what makes the rebaseline of each removal readable.
+6. No `schemaVersion` bump is required by this release on its own. The wire
+   format is unchanged and values are unchanged. Bump it if you take step 5,
+   because that is when state values actually move.
+
 ## v0.2.0 — arena-scale fixed-point math, wider params, seated netcode, path visuals
 
 Upstreamed from Neon Void's `FRAMEWORK-NOTES.md` ledger — every item below was a
