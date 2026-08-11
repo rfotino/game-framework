@@ -118,10 +118,10 @@ const VEC_SHIFT_DIV = 256; // 2^8, applied by division + trunc so it is sign-sym
  * 65536 instead — where 1 u is already far under the rounding of the answer.
  *
  * The fall-through is decided by testing the SQUARE that was going to be
- * computed anyway, not the four inputs: one comparison on a live value instead
- * of four on cold ones, and the divisor stays a literal so it still folds. Both
- * matter — these run per flow segment per ship per tick, and the input-testing
- * spelling measured ~9% of sim CPU on the current-heavy encounters.
+ * computed anyway, not the inputs: one comparison on a live value instead of
+ * four on cold ones, and the divisor stays a literal so it still folds. Both
+ * matter — these are the hottest functions here, and the input-testing spelling
+ * measured up to 13% of sim CPU in a game that calls `vLen` per entity pair.
  */
 const WIDE_DIV = 65536;
 
