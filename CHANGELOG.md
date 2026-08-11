@@ -234,6 +234,9 @@ Bump the pin. Then, in each game repo:
 3. Sentinels spelled `0x7fffffff` still work but no longer mean "larger than any
    Fx". Where one seeds a min/max sweep, prefer `Infinity` or
    `Number.MAX_SAFE_INTEGER` and re-read any that is asserted against.
+   **[SUPERSEDED by v0.5.0: seed from element 0 instead. Both suggestions here
+   are non-integers, which widens every comparison in the loop — measured at 3x
+   on one game's narrowphase suite.]**
 4. Range-guard invariants keyed to the 32768 u wall can be relaxed or deleted.
    Where one asks "is this still fixed-point", `fxIsExact` is the direct
    spelling; a plain `Number.isInteger` check is already most of it.
