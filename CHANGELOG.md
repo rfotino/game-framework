@@ -45,6 +45,12 @@ three are on the paths a game reaches for first.
   `Fx`, the ±181 u `vLenSq` and `vLenSq2`, then had to walk three migrations at
   once. The pin is now part of the release checklist in `CLAUDE.md`, and the
   template's `invariants()` uses `fxIsExact` rather than `Number.isInteger`.
+- **Two new spellings, both found by migrating a game onto this release.**
+  `vDistSq(a, b)` is `vLenSq(vSub(a, b))` without the intermediate `Vec2` — that
+  allocation dominates a per-pair-per-tick loop and made the squared form slower
+  than the `vDist` it exists to beat. `vRot(v, f)` rotates a body-local vector by
+  a unit facing; there is no trig in a sim, so this complex product IS rotation,
+  and one game had grown four private copies of it.
 - **`docs/CONVENTIONS.md` rule 3 states the contract.** The range, the
   no-bitwise-operators rule, one-exact-spelling-per-operation, and `fxIsExact`.
   All four were previously discoverable only in `fixed.ts` JSDoc and CHANGELOG
@@ -64,17 +70,20 @@ old ceilings — so a hash that moves does so through the RNG stream.
    naming, and expect `runReplay` to start reporting `fxStateViolations` paths.
    A hit is a real float leak into sim state — fix the leak, do not filter the
    report.
-3. **Delete range-driven reformulations.** Grep for comments citing overflow,
+3. **Seed a min/max sweep from element 0, not a sentinel.** `0x7fffffff` is
+   32767.99 u; `±Infinity` is not an integer, so it widens every comparison in
+   the loop. A game's narrowphase suite ran 3x faster seeded from element 0.
+4. **Delete range-driven reformulations.** Grep for comments citing overflow,
    16.16, int32, 32768 or 2^21, for `0x7fffffff` used as an `Fx` sentinel (it is
    32767.99 u — use `±Infinity` for a min/max sweep seed), for divide-before-
    multiply written to "stay in range", and for distance-instead-of-squared
    written to dodge an overflow. All of them are now working around a limit that
    is not there, and several are less accurate than the direct spelling.
-4. **Grep for bitwise operators applied to an `Fx`** — `>>`, `<<`, `| 0`, `~~`,
+5. **Grep for bitwise operators applied to an `Fx`** — `>>`, `<<`, `| 0`, `~~`,
    `>>> 0`. Each one re-imposes the ±32768 u wall. Constants that fold at build
    time are harmless but should still go, so the pattern does not read as
    sanctioned.
-5. Content gates asserting coordinates stay under 30000 / 32768 exist only to
+6. Content gates asserting coordinates stay under 30000 / 32768 exist only to
    respect the removed wall. Delete them.
 
 ## v0.4.0 — one spelling per operation, and it is exact
