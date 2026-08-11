@@ -20,7 +20,22 @@ is one-shotted. Optimize for fast feel-feedback and cheap experimentation.
    The renderer always interpolates between the last two sim states.
 3. **Fixed-point math in the sim.** Use `Fx`/`Vec2` from `@gf/framework/engine` for
    positions, velocities, and anything replay-critical. Floats are allowed only in
-   rendering code.
+   rendering code. Four things about the type that a game has to know, because none of
+   them are visible at a call site:
+   - An `Fx` is an **exact integer in a float64**, not an int32: the range is
+     |value| < 2^37 world units, and nothing in the type wraps.
+   - **Never apply a bitwise operator to one.** `>>`, `<<`, `| 0`, `~~` and `>>> 0` all
+     coerce to int32, which puts a ±32768 u wall back under a value that has no such
+     wall. A typed array holding `Fx` is a `Float64Array` for the same reason.
+   - **There is one spelling per operation and it is exact.** `vDot`/`vCross`/`vLenSq`
+     return plain world units at every magnitude; `mul`, `div`, `sqrt` and the magnitude
+     helpers size their own intermediates. A local re-spelling of one, or a
+     reformulation that divides before multiplying to "stay in range", is a bug rather
+     than an optimisation — it works around a limit that is not there.
+   - **`fxIsExact` is the guard, and it replaces the old `| 0` coercion.** Nothing rounds
+     a leaked float back to an integer now, and a non-integer `Fx` is the one value that
+     drifts across platforms instead of reproducing. Call it in `invariants()`;
+     `runReplay` also walks the whole state on the hash's cadence.
 4. **Two RNG streams.** `ctx.rng` (seeded, replay-critical, sim only) and a separate
    cosmetic RNG in the render layer for particles/screenshake/etc. Cosmetic code must
    NEVER consume `ctx.rng` — this silently desyncs replays.

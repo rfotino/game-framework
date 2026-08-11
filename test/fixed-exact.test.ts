@@ -173,13 +173,35 @@ describe("vDot / vCross are exact in fx world units", () => {
 });
 
 describe("vLen / vDist", () => {
-  it("are EXACTLY ⌊√(x²+y²)⌋ below 1448 u — accel, velocity and unit scale included", () => {
+  it("are EXACTLY ⌊√(x²+y²)⌋ below 1024 u per component — accel, velocity, unit, ship", () => {
     for (const [name, s] of SCALES.slice(0, 4)) {
       const rnd = lcg(0x1e2 + s);
       for (let i = 0; i < 300; i++) {
         const x = Math.round((rnd() * 2 - 1) * s);
         const y = Math.round((rnd() * 2 - 1) * s);
         expect(B(vLen(vec(x as Fx, y as Fx))), `${name} (${x}, ${y})`).toBe(refMag(x, y));
+      }
+    }
+  });
+
+  it("are exact right up to the 1024 u boundary the implementation actually tests", () => {
+    // 1448 u was `mul`'s old square bound and named this test for a release; the tier
+    // here is TWO_26 on each COMPONENT, i.e. 1024 u. Nothing used to exercise the gap
+    // between ship scale (40 u) and the named number, let alone the boundary itself.
+    const EDGE = 1024 * 65536;
+    for (const raw of [EDGE - 2, EDGE - 1, EDGE, EDGE + 1, EDGE + 2, 1447 * 65536]) {
+      for (const [x, y] of [
+        [raw, 0],
+        [0, -raw],
+        [raw, raw],
+        [-raw, raw - 1],
+      ]) {
+        const got = B(vLen(vec(x as Fx, y as Fx)));
+        const want = refMag(x, y);
+        // Below the edge it is exact; at and above it the 1/256 u step applies.
+        const slack = Math.abs(x) < EDGE && Math.abs(y) < EDGE ? 0n : 3n * 256n;
+        const diff = got > want ? got - want : want - got;
+        expect(diff, `(${x}, ${y})`).toBeLessThanOrEqual(slack);
       }
     }
   });

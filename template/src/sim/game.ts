@@ -11,7 +11,9 @@ import {
   clamp,
   fx,
   fxFromFloat,
+  fxIsExact,
   mul,
+  neg,
   type Fx,
   type GameDefinition,
   type TickCtx,
@@ -54,8 +56,8 @@ export const game: GameDefinition<OrbState, OrbInput, GameParams> = {
       mul(add(state.vel.y, mul(fx(inputs.dy), accel)), drag),
     );
     const pos = vec(
-      clamp(add(state.pos.x, vel.x), fx(-100), BOUND),
-      clamp(add(state.pos.y, vel.y), fx(-100), BOUND),
+      clamp(add(state.pos.x, vel.x), neg(BOUND), BOUND),
+      clamp(add(state.pos.y, vel.y), neg(BOUND), BOUND),
     );
     return { pos, vel, ticksAlive: state.ticksAlive + 1 };
   },
@@ -66,10 +68,10 @@ export const game: GameDefinition<OrbState, OrbInput, GameParams> = {
 
   invariants(state: OrbState): string[] {
     const out: string[] = [];
-    if (state.pos.x < fx(-100) || state.pos.x > BOUND) out.push("pos.x out of bounds");
-    if (state.pos.y < fx(-100) || state.pos.y > BOUND) out.push("pos.y out of bounds");
-    if (!Number.isInteger(state.pos.x) || !Number.isInteger(state.pos.y))
-      out.push("position must stay fixed-point (integer)");
+    if (state.pos.x < neg(BOUND) || state.pos.x > BOUND) out.push("pos.x out of bounds");
+    if (state.pos.y < neg(BOUND) || state.pos.y > BOUND) out.push("pos.y out of bounds");
+    if (!fxIsExact(state.pos.x) || !fxIsExact(state.pos.y))
+      out.push("position must stay an exact Fx");
     return out;
   },
 };

@@ -3,6 +3,87 @@
 Entries newest-first. Every entry that requires action in game repos includes a
 **Migration** section written as agent-executable instructions.
 
+## v0.5.0 — the constructor, the square root and the draw
+
+v0.3.0 widened `Fx` from an int32 to an exact integer and v0.4.0 made every
+magnitude helper exact. Three things were left holding the old shape, and all
+three are on the paths a game reaches for first.
+
+- **`fx()` was still an int32 constructor, and it still flipped sign.** It ended
+  in `| 0`, so `fx(2**31)` returned a NEGATIVE number and there was a
+  2^31…2^37 u band the type documented but could not build. The wall did not go
+  away in v0.3.0; it moved, on the one function every value enters through. It
+  is now `n · 2^16`, exact across the range, with `-0` collapsed.
+  - It no longer truncates a non-integer argument either. `fx(1.5)` was `1.0`
+    and is now exactly 1.5 u; an argument finer than 2^-16 lands between two
+    `Fx` and fails `fxIsExact`, which is where a leaked float should surface
+    rather than being silently rounded at the door.
+- **`sqrt` was the one magnitude helper never rewritten.** Past 2^21 u it floored
+  the answer to WHOLE world units — coarser than `vLen` at the same magnitude,
+  from the function that promised a square root. It now sheds bits from the
+  operand in pairs and gives them back to the result one at a time, so the step
+  degrades smoothly from 2^-16 instead of collapsing, and it is exact where the
+  product fits. Under 2^21 u — every magnitude a sim forms — results are
+  unchanged.
+- **`rng.int` drew from one uint32, so it truncated its range and was biased.**
+  A span past 2^32 — only 65536 world units once the operands are `Fx`, the same
+  order as the wall v0.3.0 removed — returned values from the bottom of the
+  requested range and nothing above it, silently. And `%` on a raw draw favours
+  the low end of any span that does not divide 2^32 evenly, which is most spans.
+  It now draws 53 bits and rejects the uneven tail. `chance(num, den)` is
+  `int(1, den) <= num` and inherits both fixes.
+- **`fxIsExact` is wired up.** v0.3.0 shipped it as "the guard that replaces the
+  coercion" and then nothing called it. `runReplay` now walks the whole state on
+  the hash's cadence via the new **`fxStateViolations(state)`** and reports each
+  offending path as a violation. This is not belt-and-braces: `hashState` hashes
+  a number's DECIMAL TEXT, so a leaked non-integer hashes consistently under V8
+  and differently under another runtime's double-to-string — exactly the
+  divergence the golden-hash mechanism exists to catch, and the one case it
+  cannot catch by itself.
+- **The template shipped on v0.1.0.** `template/package.json` and `README.md`
+  pinned the original tag, so every game scaffolded since started on the int32
+  `Fx`, the ±181 u `vLenSq` and `vLenSq2`, then had to walk three migrations at
+  once. The pin is now part of the release checklist in `CLAUDE.md`, and the
+  template's `invariants()` uses `fxIsExact` rather than `Number.isInteger`.
+- **Two new spellings, both found by migrating a game onto this release.**
+  `vDistSq(a, b)` is `vLenSq(vSub(a, b))` without the intermediate `Vec2` — that
+  allocation dominates a per-pair-per-tick loop and made the squared form slower
+  than the `vDist` it exists to beat. `vRot(v, f)` rotates a body-local vector by
+  a unit facing; there is no trig in a sim, so this complex product IS rotation,
+  and one game had grown four private copies of it.
+- **`docs/CONVENTIONS.md` rule 3 states the contract.** The range, the
+  no-bitwise-operators rule, one-exact-spelling-per-operation, and `fxIsExact`.
+  All four were previously discoverable only in `fixed.ts` JSDoc and CHANGELOG
+  entries an agent reads during an upgrade.
+
+**Determinism: every golden hash in every game moves**, because the RNG draw
+changed. Nothing else here alters a value a game was already computing —
+`fx`, `sqrt` and the helpers all return exactly what they returned below their
+old ceilings — so a hash that moves does so through the RNG stream.
+
+### Migration
+
+1. Re-baseline golden replay/state hashes in one deliberate pass. Expect every
+   pinned hash to move and every RNG-dependent tick count to shift slightly;
+   intent gates that assert shapes should hold unchanged.
+2. **Add `fxIsExact` to your `invariants()`** for the values you care about
+   naming, and expect `runReplay` to start reporting `fxStateViolations` paths.
+   A hit is a real float leak into sim state — fix the leak, do not filter the
+   report.
+3. **Seed a min/max sweep from element 0, not a sentinel.** `0x7fffffff` is
+   32767.99 u; `±Infinity` is not an integer, so it widens every comparison in
+   the loop. A game's narrowphase suite ran 3x faster seeded from element 0.
+4. **Delete range-driven reformulations.** Grep for comments citing overflow,
+   16.16, int32, 32768 or 2^21, for divide-before-multiply written to "stay in
+   range", and for distance-instead-of-squared written to dodge an overflow. All of them are now working around a limit that
+   is not there, and several are less accurate than the direct spelling.
+5. **Grep for bitwise operators applied to an `Fx`** — `>>`, `<<`, `| 0`, `~~`,
+   `>>> 0`. Each one re-imposes the ±32768 u wall. Constants that fold at build
+   time are harmless but should still go, so the pattern does not read as
+   sanctioned.
+6. Content gates asserting coordinates stay under 30000 / 32768 exist only to
+   respect the removed wall. Delete them.
+
 ## v0.4.0 — one spelling per operation, and it is exact
 
 The magnitude helpers had two problems and they were the same problem. `vDot`,
@@ -110,7 +191,8 @@ out of bits.
   their ceiling.** They still divide components by 256 before squaring at every
   scale a game reaches — identical results — and fall through to a /65536
   spelling only past 262144 u, where 1 u is already far below the rounding of
-  the answer.
+  the answer. **[SUPERSEDED by v0.4.0: the fast path forms no quotient at all
+  and is exact below 1024 u per component.]**
   - **How the fall-through is decided is load-bearing, so do not "simplify" it.**
     It tests the SQUARE that was going to be computed anyway rather than the
     inputs, and the divisor stays a literal. Two earlier spellings were measured
@@ -118,10 +200,13 @@ out of bits.
     and testing the inputs with the divisor passed as a variable stopped the
     engine folding `/ 256` (up to +13% in a game that calls `vLen` per entity
     pair per tick). Guarding on the live square costs one comparison and lands
-    inside run-to-run noise.
+    inside run-to-run noise. **[SUPERSEDED by v0.4.0: this measured a variable
+    divisor defeating constant folding, not operand-testing as such. With
+    literal divisors the operand test wins, and that is what ships.]**
 - **`vLenSq` is kept and is no longer a trap at arena scale** — exact to
   ~1448 u instead of ~181 u. `vLenSq2` remains the right call where the
-  magnitude is unbounded.
+  magnitude is unbounded. **[SUPERSEDED by v0.4.0: `vLenSq2` is deleted and
+  `vLenSq` is the only squared-length spelling.]**
 - **New: `fxIsExact(v)`** — whether a value is still an integer this arithmetic
   can hold. For a game's state invariants, not for a tick. With `| 0` gone,
   nothing coerces a leaked float back to an integer, and a non-integer `Fx` is
@@ -149,6 +234,9 @@ Bump the pin. Then, in each game repo:
 3. Sentinels spelled `0x7fffffff` still work but no longer mean "larger than any
    Fx". Where one seeds a min/max sweep, prefer `Infinity` or
    `Number.MAX_SAFE_INTEGER` and re-read any that is asserted against.
+   **[SUPERSEDED by v0.5.0: seed from element 0 instead. Both suggestions here
+   are non-integers, which widens every comparison in the loop — measured at 3x
+   on one game's narrowphase suite.]**
 4. Range-guard invariants keyed to the 32768 u wall can be relaxed or deleted.
    Where one asks "is this still fixed-point", `fxIsExact` is the direct
    spelling; a plain `Number.isInteger` check is already most of it.

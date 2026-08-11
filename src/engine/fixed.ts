@@ -33,8 +33,18 @@ const TWO_26 = 67108864;
 /** 2^24: the smallest a normalize wants, so flooring the length costs 2^-24 of it. */
 const TWO_24 = 16777216;
 
-/** Int -> fixed. Multiplies rather than shifts: `<<` is int32 and wraps past 32768 u. */
-export const fx = (n: number): Fx => ((n | 0) * FX_ONE) as Fx;
+/**
+ * World units -> fixed, exact across the whole range an `Fx` holds: `n · 2^16` stays
+ * inside 2^53 for every |n| < 2^37 u.
+ *
+ * It does not coerce its argument, and that is the point. The `| 0` this used to end in
+ * capped the CONSTRUCTOR at 2^31 u and wrapped past it — the sign flip the rest of this
+ * module exists not to have, on the one function every value enters through. An `n` that
+ * is a multiple of 2^-16 scales to an exact `Fx`; anything finer lands between two of
+ * them and fails `fxIsExact`, which is where a leaked float is meant to be caught rather
+ * than silently truncated here.
+ */
+export const fx = (n: number): Fx => (n * FX_ONE + 0) as Fx;
 
 /**
  * Float -> fixed. Use ONLY at boundaries (content loading, tuning params).
@@ -114,13 +124,28 @@ const isqrt = (n: number): number => {
   return x;
 };
 
-/** Integer sqrt of a fixed value, result fixed. Exact while |a| < 2^21 world units. */
+/**
+ * `√a`, result fixed. EXACT — `⌊√(a·2^16)⌋` — while |a| < 2^21 u, which is every
+ * magnitude a sim forms, and it is the same `isqrt` the magnitude helpers use.
+ *
+ * Past that the product leaves 2^53, so the operand sheds bits in PAIRS and the result
+ * takes them back one at a time: √(a·2^16) = 2^k·√((a/4^k)·2^16). Both scalings are
+ * powers of two and therefore exact, so the only rounding is the final floor, and the
+ * step stays at 2^-16·2^k rather than collapsing. The spelling this replaced shed a
+ * fixed 2^16 from the operand at once, which floored the answer to WHOLE world units —
+ * coarser than `vLen` at the same magnitude, from the one helper that promised √.
+ */
 export const sqrt = (a: Fx): Fx => {
   if (a <= 0) return 0 as Fx;
   const n = a * FX_ONE;
   if (n < EXACT) return isqrt(n) as Fx;
-  // √(a·2^16) = √(a/2^16)·2^16: shed the same 2^16 from the operand instead.
-  return (isqrt(Math.trunc(a / FX_ONE)) * FX_ONE) as Fx;
+  let v: number = a;
+  let s = 1;
+  while (v * FX_ONE >= EXACT) {
+    v = Math.trunc(v / 4);
+    s *= 2;
+  }
+  return (isqrt(v * FX_ONE) * s) as Fx;
 };
 
 export interface Vec2 {
@@ -229,6 +254,42 @@ export const vLen = (a: Vec2): Fx => mag(a.x, a.y) as Fx;
 
 /** |a − b| in fixed-point, across the full Fx range. */
 export const vDist = (a: Vec2, b: Vec2): Fx => mag(a.x - b.x, a.y - b.y) as Fx;
+
+/**
+ * `|a − b|²` as an `Fx`, exact to |a − b| < 370000 u. The spelling to reach for when
+ * comparing two separations, or a separation against a radius, without paying for the
+ * square root — `vDistSq(a, b) < mul(r, r)`.
+ *
+ * It exists because `vLenSq(vSub(a, b))` is the same number and allocates an intermediate
+ * `Vec2` to get there. In a per-pair-per-tick loop that allocation is the dominant cost,
+ * which made the squared form SLOWER than the `vDist` it was meant to beat — the opposite
+ * of why a caller reaches for it.
+ */
+export const vDistSq = (a: Vec2, b: Vec2): Fx => {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const px = dx * dx;
+  const py = dy * dy;
+  if (px < HALF_EXACT && py < HALF_EXACT) return (Math.floor((px + py) / FX_ONE) + 0) as Fx;
+  const xh = Math.floor(dx / FX_ONE);
+  const yh = Math.floor(dy / FX_ONE);
+  return (xh * dx +
+    yh * dy +
+    Math.floor(((dx - xh * FX_ONE) * dx + (dy - yh * FX_ONE) * dy) / FX_ONE) +
+    0) as Fx;
+};
+
+/**
+ * `v` rotated by the unit rotor `f` — the complex product `v · f`, and the spelling for
+ * "put this body-local vector into the world frame". `f` is a facing, not an angle: there
+ * is no trig in the sim, so a rotation is always this.
+ *
+ * Both components go through `mul`, so it is exact wherever `mul` is, at any magnitude of
+ * `v`. Games that lacked it grew a private `rot`/`cmul` per module — four in one repo, all
+ * the same four products, none of them wrong but none of them shared.
+ */
+export const vRot = (v: Vec2, f: Vec2): Vec2 =>
+  vec(sub(mul(v.x, f.x), mul(v.y, f.y)), add(mul(v.x, f.y), mul(v.y, f.x)));
 
 /**
  * `a / |a|`. The naive spelling (`vScale(a, div(FX_ONE, vLen(a)))`) forms a

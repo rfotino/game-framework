@@ -9,8 +9,12 @@ from. Multiple game repos depend on this package via pinned git tags.
 - **Every change here potentially affects all games.** Keep the engine surface small
   and platform-free (`src/engine` must never import DOM, Node, or third-party libs).
 - **Tag releases; games pin tags.** After merging changes: bump `version` in
-  `package.json`, add a `CHANGELOG.md` entry, then `git tag vX.Y.Z && git push --tags`.
-  Never expect games to track a branch.
+  `package.json`, bump the pin in `template/package.json` and `README.md` to the same
+  tag, add a `CHANGELOG.md` entry, then `git tag vX.Y.Z && git push --tags`. Never
+  expect games to track a branch. **The template pin is part of the release, not a
+  separate chore** — left behind, every newly scaffolded game starts on an ancient
+  engine and has to walk every migration at once, which is how `template/` sat on
+  v0.1.0 through three releases.
 - **CHANGELOG entries must include migration notes** whenever a change requires game
   repos to do anything beyond bumping the pin — API renames, behavior changes,
   template file changes worth back-porting. Write them as instructions an agent can
