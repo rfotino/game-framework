@@ -33,8 +33,18 @@ const TWO_26 = 67108864;
 /** 2^24: the smallest a normalize wants, so flooring the length costs 2^-24 of it. */
 const TWO_24 = 16777216;
 
-/** Int -> fixed. Multiplies rather than shifts: `<<` is int32 and wraps past 32768 u. */
-export const fx = (n: number): Fx => ((n | 0) * FX_ONE) as Fx;
+/**
+ * World units -> fixed, exact across the whole range an `Fx` holds: `n · 2^16` stays
+ * inside 2^53 for every |n| < 2^37 u.
+ *
+ * It does not coerce its argument, and that is the point. The `| 0` this used to end in
+ * capped the CONSTRUCTOR at 2^31 u and wrapped past it — the sign flip the rest of this
+ * module exists not to have, on the one function every value enters through. An `n` that
+ * is a multiple of 2^-16 scales to an exact `Fx`; anything finer lands between two of
+ * them and fails `fxIsExact`, which is where a leaked float is meant to be caught rather
+ * than silently truncated here.
+ */
+export const fx = (n: number): Fx => (n * FX_ONE + 0) as Fx;
 
 /**
  * Float -> fixed. Use ONLY at boundaries (content loading, tuning params).
@@ -114,13 +124,27 @@ const isqrt = (n: number): number => {
   return x;
 };
 
-/** Integer sqrt of a fixed value, result fixed. Exact while |a| < 2^21 world units. */
+/**
+ * `√a`, result fixed. EXACT — `⌊√(a·2^16)⌋` — while |a| < 2^21 u, which is every
+ * magnitude a sim forms, and it is the same `isqrt` the magnitude helpers use.
+ *
+ * Past that the product leaves 2^53, so the operand sheds bits in PAIRS and the result
+ * takes them back one at a time: √(a·2^16) = 2^k·√((a/4^k)·2^16). Both scalings are
+ * powers of two and therefore exact, so the only rounding is the final floor, and the
+ * step stays at 2^-16·2^k rather than collapsing. The spelling this replaced shed a
+ * fixed 2^16 from the operand at once, which floored the answer to WHOLE world units —
+ * coarser than `vLen` at the same magnitude, from the one helper that promised √.
+ */
 export const sqrt = (a: Fx): Fx => {
   if (a <= 0) return 0 as Fx;
-  const n = a * FX_ONE;
-  if (n < EXACT) return isqrt(n) as Fx;
-  // √(a·2^16) = √(a/2^16)·2^16: shed the same 2^16 from the operand instead.
-  return (isqrt(Math.trunc(a / FX_ONE)) * FX_ONE) as Fx;
+  if (a * FX_ONE < EXACT) return isqrt(a * FX_ONE) as Fx;
+  let v: number = a;
+  let s = 1;
+  while (v * FX_ONE >= EXACT) {
+    v = Math.trunc(v / 4);
+    s *= 2;
+  }
+  return (isqrt(v * FX_ONE) * s) as Fx;
 };
 
 export interface Vec2 {

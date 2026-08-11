@@ -36,8 +36,7 @@ describe("vLen", () => {
     expect(toFloat(vLen(v(0, 0)))).toBe(0);
   });
 
-  it("stays correct past the 181-unit square-overflow threshold", () => {
-    // The whole point: vLenSq wraps here, vLen must not.
+  it("stays correct at every scale a real arena reaches", () => {
     for (const d of [200, 500, 1200, 2400, 8000]) {
       expect(toFloat(vLen(v(d, 0)))).toBeCloseTo(d, 1);
       expect(toFloat(vLen(v(0, -d)))).toBeCloseTo(d, 1);

@@ -7,6 +7,7 @@
  * Policy (CLAUDE.md #7): replays are disposable across schemaVersion bumps.
  */
 
+import { fxIsExact } from "./fixed.js";
 import type { GameDefinition, InputFrame, Params, SimState } from "./game.js";
 import { Rng } from "./rng.js";
 
@@ -47,6 +48,30 @@ export function canonicalJson(v: unknown): string {
   return `{${body}}`;
 }
 
+/**
+ * Every number in `state` that is not an exact integer, by path.
+ *
+ * This is the guard that `| 0` used to be. Nothing coerces a leaked float back to an
+ * integer any more, and a non-integer is the one value in a sim state that does not
+ * survive a port: `hashState` hashes a number's DECIMAL TEXT, and 0.1 + 0.2 formats
+ * differently under a different runtime's double-to-string than it does under V8 — so
+ * the hash agrees with itself here and diverges there, which is the failure this file
+ * exists to catch. Checked on the hash's own cadence, because the hash is the artifact
+ * a port compares.
+ */
+export function fxStateViolations(state: unknown, path = "", out: string[] = []): string[] {
+  if (typeof state === "number") {
+    if (!fxIsExact(state)) out.push(`${path || "state"} = ${state} is not an exact Fx`);
+  } else if (Array.isArray(state)) {
+    for (let i = 0; i < state.length; i++) fxStateViolations(state[i], `${path}[${i}]`, out);
+  } else if (state !== null && typeof state === "object") {
+    for (const k of Object.keys(state)) {
+      fxStateViolations((state as Record<string, unknown>)[k], path ? `${path}.${k}` : k, out);
+    }
+  }
+  return out;
+}
+
 /** Run a replay (or a live frame source) through the sim, collecting hashes + violations. */
 export function runReplay<S extends SimState, I extends InputFrame, P extends Params>(
   game: GameDefinition<S, I, P>,
@@ -68,8 +93,11 @@ export function runReplay<S extends SimState, I extends InputFrame, P extends Pa
   for (; t < replay.frames.length; t++) {
     if (opts.stopAtTick !== undefined && t >= opts.stopAtTick) break;
     state = game.tick(state, replay.frames[t], { rng, params: replay.params, tick: t });
-    if (t % hashEvery === 0) hashes.push({ tick: t, hash: hashState(state) });
     const v = game.invariants(state);
+    if (t % hashEvery === 0) {
+      hashes.push({ tick: t, hash: hashState(state) });
+      v.push(...fxStateViolations(state));
+    }
     if (v.length) violations.push({ tick: t, messages: v });
     if (game.isOver(state)) break;
   }
