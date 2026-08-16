@@ -36,6 +36,12 @@ is one-shotted. Optimize for fast feel-feedback and cheap experimentation.
      a leaked float back to an integer now, and a non-integer `Fx` is the one value that
      drifts across platforms instead of reproducing. Call it in `invariants()`;
      `runReplay` also walks the whole state on the hash's cadence.
+   - **A bearing is an `Ang`, not an `Fx` and not a table index.** 2^20 units to the turn,
+     a separate brand so it cannot be added to a position. The sim gets its trigonometry
+     from `vFromAng`/`angOf` and never from `Math.cos`/`Math.atan2`, which are not
+     specified to a bit; the tables behind them are checked-in data. Never build a local
+     direction table at "the resolution this encounter needs" — that resolution leaks into
+     the design as authored rates that quietly collapse onto each other.
 4. **Two RNG streams.** `ctx.rng` (seeded, replay-critical, sim only) and a separate
    cosmetic RNG in the render layer for particles/screenshake/etc. Cosmetic code must
    NEVER consume `ctx.rng` — this silently desyncs replays.

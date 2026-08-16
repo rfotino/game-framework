@@ -3,6 +3,118 @@
 Entries newest-first. Every entry that requires action in game repos includes a
 **Migration** section written as agent-executable instructions.
 
+## v0.6.0 — a bearing is a number, and the table is checked in
+
+`vRot`'s doc said, verbatim, "there is no trig in the sim, so a rotation is
+always this." That was true, and it was also the shape of a hole. A rotor
+rotates a vector you already have; it cannot answer "which way is 137.4°", and
+every game that needed to answer it built the same workaround — a precomputed
+direction table at whatever resolution it guessed at, with integer sub-index
+counters bolted alongside to fake the resolution it did not have. One shipping
+game had 720 entries, half a degree, and paid for it twice: authored sweep rates
+collapsed onto a common value because they all landed inside one table step, and
+the sim's position sat half a degree behind the rendered one because the render
+path interpolated and the sim could not.
+
+The reason no game just called `Math.cos` is the right one. `Math.cos` is not
+specified to a bit. Two clients on different engine builds get answers that
+differ in the last place, the difference lands in a facing, and the replay hash
+diverges with nothing wrong in the game code — the one class of desync a golden
+hash reports without being able to explain.
+
+- **`Ang`, a new branded integer: 2^20 units to the turn**, one unit ≈ 0.00034°.
+  A separate brand from `Fx` on purpose — both are exact integers in a float64
+  and nothing else would stop a bearing being added to a position. There is no
+  `angAdd`: `a + delta` is a plain `number`, and the only thing that makes it an
+  `Ang` again is `angWrap`, so the type asks for the wrap at exactly the point
+  where forgetting it is the bug.
+- **`vFromAng(a)` is the unit vector at a bearing.** Two checked-in tables — a
+  coarse one per 1/1024 turn, a fine one per 1/2^20 turn — combined through the
+  angle-addition identity. That identity is EXACT MATH and not an interpolation:
+  the products stay under 2^48 and their sum under 2^49 (measured 2^48.00), both
+  exact in a float64; the divisor is 2^32, a power of two. The only rounding in
+  the path is the table entries, done once at generation time, and one
+  `Math.round`, which ECMAScript pins. Each component lands within 0.51 fx of the
+  true value, the vector within 0.71, |v| within [FX_ONE − 0.70, FX_ONE + 0.70],
+  and the four cardinal bearings are EXACT. **That is the same error as
+  `Math.cos` + round, at the same speed** (54 ns against 49 ns per call) — the
+  split buys determinism and costs nothing.
+  - A 16-iteration CORDIC was written and measured first: 300 ns per call and 19×
+    the error. Recorded here for the next person who suggests it.
+- **`angOf(v)` is the deterministic `atan2`** — octant fold, a 4096-entry table,
+  integer linear interpolation. Within 1 unit (0.00034°) at every magnitude,
+  because the fold reduces to a ratio and a ratio is scale-free. 27 ns.
+  `angOf(vFromAng(a))` returns `a` within 2 units.
+- **`angWrap` and `angDiff`.** `angWrap` because `%` keeps the sign of its
+  dividend, so a bearing that steps below zero comes back negative and the index
+  formed from it reads off the front of the table. `angDiff` because subtracting
+  two bearings either side of zero reports a whole turn where the answer is
+  0.0007°, and a turn controller fed that spins the long way round.
+- **The tables are CHECKED-IN GENERATED DATA** — `src/engine/angle-tables.ts`,
+  produced by `scripts/gen-angle-tables.mjs` and committed. They are not built at
+  module init, and `prepare` does not regenerate them. `prepare` runs on the
+  INSTALLING machine: a table built there is a table built by that machine's
+  `Math.cos`, which is the divergence this release exists to remove, wearing a
+  build step as a disguise. The coarse table is 8-fold symmetric by construction
+  — the generator seeds one octant and folds the rest with integer
+  negate-and-swap — so the symmetry is a property of the file rather than of the
+  libm that made it.
+- **`vRot`'s doc comment is rewritten** and the sentence above is retired. Rotors
+  are still how a body that HAS a facing turns: four multiplies, no table, exact.
+  `vFromAng` is for the other case, where the bearing is the authored thing.
+- **New: `test/angle.test.ts`, `test/angle-exact.test.ts`,
+  `test/angle-tables.test.ts`.** The exactness file proves the float64 path
+  bit-identical to the same formula in BigInt; the tables file reproduces the
+  generated data within a tolerance of 1, deliberately NOT to the bit, so an
+  engine changing `Math.cos` fails nothing and a mangled digit fails loudly.
+
+**Determinism: nothing moves.** This release is purely additive — no existing
+function changes a value it already returned, so unlike v0.4.0 and v0.5.0 no
+golden hash needs re-baselining to take the pin. Hashes move only where a game
+adopts the new API and deletes its own direction table, which is a deliberate and
+separate change.
+
+### Migration
+
+Bump the pin to `github:rfotino/game-framework#v0.6.0`, `npm install`, run the
+suite. It must pass unchanged; a failure on the bump alone is a framework bug and
+not a migration one. Nothing below is required to take the release, and all of it
+is required if your game has an angle in it.
+
+1. **Find the workaround.**
+   `grep -rnE "Math\.(cos|sin|atan2)|DIRS\[|deg2rad|/ *720|[Mm]illi" src/sim/`.
+   Any `Math.cos`/`Math.sin`/`Math.atan2` under `src/sim/` outside a boundary
+   conversion is a determinism bug that until now had no fix; a private direction
+   table is now dead weight.
+2. **Delete the table and its sub-index counters together.** A precomputed
+   direction table plus a parallel integer "milli" counter is ONE mechanism, not
+   two, and half of it left behind is worse than all of it — the halves round
+   differently, and you get a bearing that disagrees with itself inside one tick.
+   Facings become `Ang` in state; directions become `vFromAng(a)` at the point of
+   use.
+3. **Re-read your authored rates before assuming they were fine.** The reason is
+   not tidiness. An integer step per tick cannot express a sweep slower than one
+   table step per tick, so every rate past that floor silently BECAME the floor.
+   Convert seconds-per-revolution once, at load —
+   `Math.round(ANG_TURN / (secPerRev * TICK_HZ))` — and drop any `|| 1` fallback,
+   which is the thing that pinned the rates together.
+4. **Bump `schemaVersion`.** Step 2 changes the shape and the units of saved and
+   replayed state; a table index is not a bearing. Replays are disposable across
+   versions by convention, so this is a bump and not a migration function.
+5. **Re-baseline golden hashes after 2–4, not with the pin bump.** The bump alone
+   moves nothing, and keeping that true is what makes the deletion's rebaseline
+   readable. A hash that moves in a scenario with no bearings in it is a leak, not
+   a rebaseline.
+6. **Angles cross the render boundary as floats, through `angToRad`.** Do not keep
+   a float bearing beside the `Ang` one — that is the "sim half a degree behind
+   the picture" bug with the sign flipped.
+7. **Delete any local `atan2` approximation** — table, polynomial, or a
+   small-angle `side/along` divide guarded by a comment about determinism. `angOf`
+   is 0.00034° at every magnitude.
+8. **Never rebuild the tables locally.** If you want a finer one: the unit is
+   already finer than the direction it produces, `vFromAng` is good to about 2
+   units and `ANG_TURN` is 2^20.
+
 ## v0.5.0 — the constructor, the square root and the draw
 
 v0.3.0 widened `Fx` from an int32 to an exact integer and v0.4.0 made every
@@ -50,7 +162,9 @@ three are on the paths a game reaches for first.
   allocation dominates a per-pair-per-tick loop and made the squared form slower
   than the `vDist` it exists to beat. `vRot(v, f)` rotates a body-local vector by
   a unit facing; there is no trig in a sim, so this complex product IS rotation,
-  and one game had grown four private copies of it.
+  and one game had grown four private copies of it. **[SUPERSEDED IN PART by
+  v0.6.0: there is trig in the sim now — `vFromAng` — and `vRot` is the spelling
+  for a facing you already hold, not the only spelling for rotation.]**
 - **`docs/CONVENTIONS.md` rule 3 states the contract.** The range, the
   no-bitwise-operators rule, one-exact-spelling-per-operation, and `fxIsExact`.
   All four were previously discoverable only in `fixed.ts` JSDoc and CHANGELOG

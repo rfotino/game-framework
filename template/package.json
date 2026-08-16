@@ -11,7 +11,7 @@
     "deploy": "echo 'TODO: wire telemachus deploy (rsync dist/ + pm2/nginx)' && exit 1"
   },
   "dependencies": {
-    "@gf/framework": "github:rfotino/game-framework#v0.5.0",
+    "@gf/framework": "github:rfotino/game-framework#v0.6.0",
     "howler": "^2.2.4",
     "pixi.js": "^8.6.0"
   },

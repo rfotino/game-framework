@@ -9,6 +9,8 @@ import type { Params, InputFrame } from "../src/engine/game.js";
 import type { RngState } from "../src/engine/rng.js";
 import type { SnapshotMsg, WelcomeMsg } from "../src/net/protocol.js";
 import type { Visual, VisualManifest } from "../src/shell/adapters.js";
+import { ANG_HALF, ANG_QUARTER, angWrap, vFromAng } from "../src/engine/angle.js";
+import { add, fx } from "../src/engine/fixed.js";
 
 describe("Params leaves", () => {
   it("holds numbers, booleans, strings, leaf arrays and nested groups", () => {
@@ -72,6 +74,20 @@ describe("welcome / snapshot payloads", () => {
       payload: { playerId: "p1", seed: 7, tickHz: 60, tick: 0, state: {} },
     };
     expect(welcome.payload.slot).toBeUndefined();
+  });
+});
+
+describe("Ang and Fx do not interconvert", () => {
+  it("refuses a bearing where a world unit belongs, and the reverse", () => {
+    // Both are exact integers in a float64, so the BRAND is the only thing standing
+    // between a bearing added to a position and a bug that only shows up on screen.
+    // @ts-expect-error an Ang is not an Fx
+    add(fx(1), ANG_QUARTER);
+    // @ts-expect-error an Fx is not an Ang
+    vFromAng(fx(1));
+    // @ts-expect-error a raw number is not an Ang either — angWrap is the way back in
+    vFromAng(ANG_QUARTER + ANG_QUARTER);
+    expect(angWrap(ANG_QUARTER + ANG_QUARTER)).toBe(ANG_HALF);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@gf/framework",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Deterministic 2D game framework for agent-driven iterative development",
   "type": "module",
   "license": "MIT",
@@ -26,6 +26,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "gen:angle": "node scripts/gen-angle-tables.mjs",
     "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "npm run typecheck && vitest run"
