@@ -17,6 +17,9 @@
  * own bound. Past it a result sheds low bits deterministically — it does NOT
  * wrap to a negative number, so the failure mode is a rounding error rather
  * than a sign flip, and it is bounded by the magnitude that caused it.
+ *
+ * Bearings, and the direction at one, are in angle.ts. The unit there is turns, not world
+ * units, and the two brands do not interconvert.
  */
 
 export type Fx = number & { readonly __fx: unique symbol };
@@ -281,11 +284,16 @@ export const vDistSq = (a: Vec2, b: Vec2): Fx => {
 
 /**
  * `v` rotated by the unit rotor `f` — the complex product `v · f`, and the spelling for
- * "put this body-local vector into the world frame". `f` is a facing, not an angle: there
- * is no trig in the sim, so a rotation is always this.
+ * "put this body-local vector into the world frame". `f` is a rotor, not an angle: four
+ * multiplies, no table, and exact wherever `mul` is, at any magnitude of `v`.
  *
- * Both components go through `mul`, so it is exact wherever `mul` is, at any magnitude of
- * `v`. Games that lacked it grew a private `rot`/`cmul` per module — four in one repo, all
+ * That is why a body that HAS a facing holds it as a rotor and composes with this, rather
+ * than carrying a bearing and rebuilding the direction every tick: `vFromAng` (angle.ts)
+ * costs a table lookup and rounds each component by up to half a unit, and this costs
+ * neither. Reach for the angle where the bearing is the authored thing — a sweep rate, a
+ * placement, an aim error — and hold the rotor everywhere else.
+ *
+ * Games that lacked it grew a private `rot`/`cmul` per module — four in one repo, all
  * the same four products, none of them wrong but none of them shared.
  */
 export const vRot = (v: Vec2, f: Vec2): Vec2 =>
