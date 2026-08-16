@@ -10,7 +10,7 @@ core.
 - **This repo** is a versioned package + template. Games do NOT live here.
 - **Each game is its own repo**, scaffolded from `template/` via
   `npx degit rfotino/game-framework/template <slug>`, depending on this package
-  through a pinned git tag: `"@gf/framework": "github:rfotino/game-framework#v0.5.0"`.
+  through a pinned git tag: `"@gf/framework": "github:rfotino/game-framework#v0.6.0"`.
 - **Shared conventions** live in `docs/CONVENTIONS.md`; each game's `CLAUDE.md`
   imports it from `node_modules` and layers game-specific rules on top.
 - **Global changes** ship as tagged releases with CHANGELOG migration notes; an
