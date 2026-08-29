@@ -3,6 +3,25 @@
 Entries newest-first. Every entry that requires action in game repos includes a
 **Migration** section written as agent-executable instructions.
 
+## v0.6.1 — the RNG's saved state is the wrapped word
+
+`nextUint32` wrapped its local draw but let the retained accumulator grow
+unwrapped, so `save()` leaked representation: a stream `restore`d from a saved
+state (which wraps) and its original twin drew identical values while holding
+`s` fields an exact multiple of 2^32 apart. Any deterministic sim comparing
+restored streams by raw `s` — a desync check, a parity harness, a shadow
+session — false-positives on nothing.
+
+The wrap now lands on the field. The stream is byte-identical (the draw always
+operated on the wrapped value; a regression test pins the historical sequence),
+`save()` returns a true uint32, save/restore round-trips to raw equality, and
+equal `s` now IS equal stream.
+
+**Migration.** None required — the stream is unchanged, so no replay or hash
+moves. If your code defensively compares saved states as `(a.s >>> 0) ===
+(b.s >>> 0)`, or copies `s` verbatim to bypass `restore()`'s wrap, both remain
+correct and may now be simplified to raw comparison and plain `restore()`.
+
 ## v0.6.0 — a bearing is a number, and the table is checked in
 
 `vRot`'s doc said, verbatim, "there is no trig in the sim, so a rotation is
