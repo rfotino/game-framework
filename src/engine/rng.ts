@@ -31,7 +31,11 @@ export class Rng {
 
   /** Uniform uint32. Prefer the int helpers below inside sim code (fixed-point world). */
   nextUint32(): number {
-    let t = (this.s += 0x6d2b79f5) >>> 0;
+    // The wrap must land on the FIELD, not just the local: an accumulator left unwrapped
+    // makes save() leak representation — a restored twin drawing the identical stream
+    // holds an `s` an exact multiple of 2^32 away, so raw state comparisons false-positive.
+    this.s = (this.s + 0x6d2b79f5) >>> 0;
+    let t = this.s;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return (t ^ (t >>> 14)) >>> 0;
@@ -101,6 +105,7 @@ export class Rng {
     return this.nextUint32() / 4294967296;
   }
 
+  /** The state is the wrapped uint32 word: equal `s` IS equal stream, comparable raw. */
   save(): RngState {
     return { s: this.s };
   }
